@@ -125,7 +125,7 @@ test("sessions saved before the extras migration load with no context, sidekicks
   store.close();
 });
 
-test("learned_limit deltas round-trip and keep the maximum per model; they are not settings", () => {
+test("learned_limit deltas round-trip and the latest value per model wins, lower or higher; they are not settings", () => {
   const dir = mkdtempSync(join(tmpdir(), "aw-")); const path = join(dir, "w.db");
   let store = openStore(path);
   expect(store.load().learnedLimits).toEqual({});
@@ -134,10 +134,12 @@ test("learned_limit deltas round-trip and keep the maximum per model; they are n
   store.close();
   store = openStore(path);
   const init = store.load();
-  expect(init.learnedLimits).toEqual({ m: 180_000, n: 150_000 });
+  expect(init.learnedLimits).toEqual({ m: 170_000, n: 150_000 });
   expect(init.settings).toEqual(CONFIG.defaultSettings);
   store.persist(createWorld(init, deps()).updateSettings({ theme: "space" }));
-  expect(store.load().learnedLimits).toEqual({ m: 180_000, n: 150_000 });
+  expect(store.load().learnedLimits).toEqual({ m: 170_000, n: 150_000 });
+  store.persist([{ type: "learned_limit", model: "m", limit: 190_000 }]);
+  expect(store.load().learnedLimits).toEqual({ m: 190_000, n: 150_000 });
   store.close();
 });
 

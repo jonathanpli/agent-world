@@ -633,3 +633,48 @@ test("GET /api/recap: today by default, a given day, 400 on a malformed day, 403
   expect((await raw(base, "GET", "/api/recap", { host: "127.0.0.1:4317", origin: "https://evil.example" })).status).toBe(403);
   expect((await raw(base, "GET", "/api/recap", { host: "127.0.0.1:4317" })).status).toBe(200);
 });
+
+// ---- final review fixes: what is logged, what is broadcast, and when the model is read ----
+
+test("an injected context event is applied but not written to the event log", async () => {
+  const { base, app, store } = await start({ demo: true });
+  await app.inject({ source: "demo", sessionId: "d1", repoPath: "/demo/r", at: 1, kind: "session_start", model: "claude-opus-5-5", tier: 3 });
+  await app.inject({ source: "demo", sessionId: "d1", repoPath: "/demo/r", at: 2, kind: "context", contextTokens: 50_000, boundaries: [] });
+  expect((await snapshot(base)).sessions[0]!.context).toMatchObject({ tokens: 50_000 });
+  expect(store.eventCount()).toBe(1);
+});
+
+test("credit and learned_limit deltas are persisted but never sent to browsers", async () => {
+  const inner = openStore(":memory:");
+  const persisted: Delta[] = [];
+  const { base, app, store } = await start({ store: { ...inner, persist: d => { persisted.push(...d); inner.persist(d); } } });
+  const next = await openStream(base);
+  await next();
+  const sent: Delta[] = [];
+  const at = Date.now();
+  const e = (kind: AgentEvent["kind"], over: Partial<AgentEvent> = {}): AgentEvent =>
+    ({ source: "claude-code", sessionId: "s1", repoPath: "/r/a", at, kind, model: "claude-opus-5-5", tier: 3, ...over });
+  for (const ev of [e("session_start"), e("prompt", { detail: { text: "go" } }),
+    e("context", { contextTokens: 30_000, boundaries: [{ uuid: "u1", trigger: "auto", preTokens: 180_000, postTokens: 30_000 }] })]) {
+    await app.inject(ev);
+    sent.push(...((await next()).data as Delta[]));
+  }
+  expect(persisted.map(d => d.type)).toEqual(expect.arrayContaining(["credit", "learned_limit"]));
+  expect(sent.length).toBeGreaterThan(0);
+  expect(sent.filter(d => d.type === "credit" || d.type === "learned_limit")).toEqual([]);
+  expect(store.load().learnedLimits).toEqual({ "claude-opus-5-5": 180_000 });
+});
+
+test("sidekick events and agent-id tools for an unknown session never read the transcript for a model", async () => {
+  let reads = 0;
+  const { base, app } = await start({ readTranscript: byModel(async () => { reads++; return "claude-opus-5-5"; }) });
+  const e = (kind: AgentEvent["kind"], detail: Record<string, string>): AgentEvent =>
+    ({ source: "claude-code", sessionId: "ghost", repoPath: "/r/a", at: 1, kind, detail: { transcriptPath: "/t.jsonl", ...detail } });
+  await app.inject(e("sub_start", { agentId: "a1", agentType: "Explore" }));
+  await app.inject(e("sub_end", { agentId: "a1" }));
+  await app.inject(e("tool", { agentId: "a1", tool: "Read" }));
+  expect(reads).toBe(0);
+  expect((await snapshot(base)).sessions).toEqual([]);
+  await app.inject(e("prompt", { text: "hi" }));             // an event that does create the session still reads it
+  expect(reads).toBe(1);
+});

@@ -23,7 +23,7 @@ const TOOLS: DemoTool[] = [
   { tool: "Bash", summary: "Bash git diff", toolKind: "shell" },
   { tool: "Task", summary: "Delegate a codebase search", toolKind: "delegate" },
   { tool: "Write", summary: "Write tests/checkout.test.ts", toolKind: "edit" },
-  { tool: "Glob", summary: "Glob **/*.yaml", toolKind: "other" },
+  { tool: "Glob", summary: "Glob **/*.yaml", toolKind: "read" },
   { tool: "WebSearch", summary: "Search for the library changelog", toolKind: "web" },
   { tool: "TodoWrite", summary: "Update the task list", toolKind: "other" },
 ];

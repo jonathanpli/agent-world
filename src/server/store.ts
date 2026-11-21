@@ -120,10 +120,10 @@ export function openStore(path: string): Store {
     return Object.fromEntries(Object.entries(parsed).filter(([, v]) => typeof v === "number" && Number.isFinite(v))) as Record<string, number>;
   }
 
-  /** Keeps the larger of the stored and the new limit for the model. */
+  /** Saves the latest learned limit for the model, replacing the stored one (lower or higher). */
   function saveLearnedLimit(model: string, limit: number): void {
     const limits = learnedLimits();
-    if ((limits[model] ?? 0) >= limit) return;
+    if (limits[model] === limit) return;
     limits[model] = limit;
     upsertSetting.run(LEARNED_LIMITS_KEY, JSON.stringify(limits));
   }

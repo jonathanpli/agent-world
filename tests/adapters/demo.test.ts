@@ -1,4 +1,5 @@
 import { expect, test } from "vitest";
+import { toolKindFor } from "../../src/adapters/claudeCode";
 import { createDemo } from "../../src/adapters/demo";
 import { mulberry32 } from "../../src/shared/rng";
 import type { AgentEvent } from "../../src/shared/types";
@@ -48,4 +49,12 @@ test("demo simulates sidekicks, every tool kind, failures, and a context that cl
     compacted = true;
   }
   expect(compacted).toBe(true);
+});
+
+test("every demo tool carries the kind the Claude Code adapter gives that tool (Glob is read)", () => {
+  let t = 0; const tools: AgentEvent[] = [];
+  const demo = createDemo({ rng: mulberry32(7), now: () => t, emit: e => { if (e.kind === "tool") tools.push(e); } });
+  for (let i = 0; i < 1800; i++) { t = i * 1000; demo.step(); }
+  expect(tools.some(e => e.detail?.tool === "Glob")).toBe(true);
+  for (const e of tools) expect(e.detail?.toolKind).toBe(toolKindFor(e.detail!.tool!));
 });

@@ -109,8 +109,10 @@ export function createApp(opts: AppOptions): App {
       if (d.type === "session") sessionWantsModel.set(d.session.key, wantsModel(d.session));
       else if (d.type === "session_removed") { sessionWantsModel.delete(d.key); modelTries.delete(d.key); forgetContextReads(d.key); }
     }
-    if (deltas.length === 0) return;
-    const msg = `event: delta\ndata: ${JSON.stringify(deltas)}\n\n`;
+    // credit and learned limits are for the store only: browsers do not use them
+    const shown = deltas.filter(d => d.type !== "credit" && d.type !== "learned_limit");
+    if (shown.length === 0) return;
+    const msg = `event: delta\ndata: ${JSON.stringify(shown)}\n\n`;
     for (const s of streams) s.write(msg);
   }
 
@@ -121,7 +123,10 @@ export function createApp(opts: AppOptions): App {
     ev.repoPath = await within(resolveRepo(ev.repoPath), CONFIG.repoResolveTimeoutMs, ev.repoPath);
     const key = `${ev.source}:${ev.sessionId}`;
     const transcriptPath = ev.detail?.transcriptPath;
-    if (ev.model === undefined && ev.tier === undefined && (sessionWantsModel.get(key) ?? true) && transcriptPath !== undefined) {
+    // events that never create a session do not read for a model when the session is unknown
+    const createsSession = !(ev.kind === "sub_start" || ev.kind === "sub_end" || ev.kind === "context" || (ev.kind === "tool" && !!ev.detail?.agentId));
+    const wants = sessionWantsModel.get(key) ?? createsSession;
+    if (ev.model === undefined && ev.tier === undefined && wants && transcriptPath !== undefined) {
       const t = now();
       const last = modelTries.get(key);
       if (last === undefined || (t - last.at >= CONFIG.modelRetryMs && last.count < CONFIG.modelRetryMax)) {
@@ -135,7 +140,7 @@ export function createApp(opts: AppOptions): App {
       }
     }
     if (ev.detail !== undefined) delete ev.detail.transcriptPath;
-    store.logEvent(ev);
+    if (ev.kind !== "context") store.logEvent(ev);      // context readings are not logged (the demo injects them)
     commit(world.apply(ev));
   }
 

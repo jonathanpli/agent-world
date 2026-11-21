@@ -23,8 +23,10 @@ afterEach(async () => {
 test("replaying captured hooks: one sidekick comes and goes, a failure is marked, the recap adds up", async () => {
   const store = openStore(":memory:");
   // The model is reported by the transcript, so the session binds and its work is credited at once.
+  // a fixed midday clock: the events and the recap's "today" can never straddle a local midnight
+  const NOW = new Date(2026, 5, 10, 12).getTime();
   const app = createApp({
-    store, demo: false, resolveRepo: async p => p,
+    store, demo: false, resolveRepo: async p => p, now: () => NOW,
     readTranscript: async () => ({ model: "claude-opus-5-5", contextTokens: null, boundaries: [] }),
   });
   const server = createServer(app.handler);
@@ -48,5 +50,6 @@ test("replaying captured hooks: one sidekick comes and goes, a failure is marked
   await ingest("Stop");
 
   const recap = await ((await fetch(`${base}/api/recap`)).json() as Promise<Recap>);
+  expect(recap.day).toBe("2026-06-10");
   expect(recap.totals).toMatchObject({ sidekicks: 1, failures: 1, tasks: 1 });
 });
