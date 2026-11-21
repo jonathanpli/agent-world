@@ -31,5 +31,14 @@ export const CONFIG = {
   pruneIntervalMs: 3_600_000,
   cosmeticEveryLevels: 5,
   effortSpeed: { low: 0.5, medium: 1, high: 1.5, xhigh: 2, max: 3 },
+  demo: {
+    stepMs: 1_000,
+    sessionsMin: 3, sessionsStart: 5, sessionsMax: 6,
+    toolsPerTask: [3, 15], toolGapMs: [1_000, 4_000],
+    needsInputChance: 0.25, needsInputWaitMs: [5_000, 20_000],
+    pauseMs: [5_000, 30_000],
+    endChance: 0.1, respawnMaxMs: 10_000, endDelayMs: [1_000, 3_000],
+    modelChangeChance: 0.05,
+  },
   defaultSettings: { theme: "office", notifyNeedsInput: true, notifyDone: true, sound: false, rosterCap: 12 },
 } as const;

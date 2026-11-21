@@ -18,6 +18,7 @@ process.on("warning", w => {
 
 const { openStore } = await import("./store");
 const { createApp } = await import("./app");
+const { createDemo } = await import("../adapters/demo");
 
 const demo = process.argv.includes("--demo");
 const { port, home, warnings } = serverEnv(process.env, demo, homedir());
@@ -40,8 +41,15 @@ server.listen(port, "127.0.0.1", () => {
   const ticker = setInterval(() => {
     try { app.tick(); } catch (e) { console.error("agent-world: tick failed", e); }
   }, CONFIG.tickMs);
+  const simulator = demo
+    ? createDemo({ emit: ev => { app.inject(ev).catch(e => console.error("agent-world: demo inject failed", e)); }, rng: Math.random, now: Date.now })
+    : null;
+  const simTimer = simulator === null ? null : setInterval(() => {
+    try { simulator.step(); } catch (e) { console.error("agent-world: demo step failed", e); }
+  }, CONFIG.demo.stepMs);
   const shutdown = (): void => {
     clearInterval(ticker);
+    if (simTimer !== null) clearInterval(simTimer);
     app.close();
     server.close();
     server.closeAllConnections();
