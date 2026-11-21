@@ -18,7 +18,7 @@ export function session(key: string, characterId: string | null, repoId: string,
   return {
     key, source: "t", sessionId: key, characterId, tempLook: characterId === null ? LOOK : null, repoId,
     state: "working", stateSince: 0, model: null, tier: 2, effort: "medium",
-    tierKnown: true, pendingXp: 0, pendingStats: { tasks: 0, tools: 0 }, startedAt: 0, lastEventAt: 0,
+    tierKnown: true, graceSince: null, pendingXp: 0, pendingStats: { tasks: 0, tools: 0 }, startedAt: 0, lastEventAt: 0,
     task: null, lastSummary: null, attention: false, activity: [], ...over,
   };
 }

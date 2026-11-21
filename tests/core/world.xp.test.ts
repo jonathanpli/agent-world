@@ -79,5 +79,5 @@ test("character delta is emitted once per event, after the notices' changes", ()
 
 test("snapshot stays exactly the shared shape", () => {
   const w = newWorld(); w.apply(ev("tool"));
-  expect(Object.keys(sess(w)[0]).sort()).toEqual(["activity", "attention", "characterId", "effort", "key", "lastEventAt", "lastSummary", "model", "pendingStats", "pendingXp", "repoId", "sessionId", "source", "startedAt", "state", "stateSince", "task", "tempLook", "tier", "tierKnown"]);
+  expect(Object.keys(sess(w)[0]).sort()).toEqual(["activity", "attention", "characterId", "effort", "graceSince", "key", "lastEventAt", "lastSummary", "model", "pendingStats", "pendingXp", "repoId", "sessionId", "source", "startedAt", "state", "stateSince", "task", "tempLook", "tier", "tierKnown"]);
 });

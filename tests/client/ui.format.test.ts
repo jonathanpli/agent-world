@@ -1,8 +1,8 @@
 import { expect, test } from "vitest";
 import { ackEpisode, formatDuration, lockLevel, renameTo, shouldAck, xpProgress } from "../../src/client/ui/inspector";
-import { rosterKey, rosterRows } from "../../src/client/ui/roster";
+import { rosterKey, rosterRows, rosterSub } from "../../src/client/ui/roster";
 import { tickerItems } from "../../src/client/ui/ticker";
-import { applySnapshot, emptyState, unboundLabel } from "../../src/client/state";
+import { applySnapshot, emptyState, tierTitleOf, unboundLabel } from "../../src/client/state";
 import { plateText } from "../../src/client/engine/overlay";
 import { HATS, unlocked } from "../../src/shared/cosmetics";
 import { CONFIG } from "../../src/shared/config";
@@ -102,4 +102,22 @@ test("roster and plate labels: an unknown-tier session is Arriving, a real temp 
   expect(rows.find(r => r.id === "a1")).toMatchObject({ name: "Arriving", level: null, temp: true });
   expect(rows.find(r => r.id === "t1")).toMatchObject({ name: "Temp", level: null, temp: true });
   expect(plateText(unboundLabel(arriving), null, "Engineer", false)).toEqual({ name: "Arriving", rest: "" });
+});
+
+test("an arrival has no tier title: plate, roster sub-line and inspector title leave it out", () => {
+  const title = (t: number) => `T${t}`;
+  const arriving = session("a1", null, "r", { tierKnown: false, tier: 2 });
+  const temp = session("t1", null, "r", { tier: 3 });
+  expect(tierTitleOf(arriving, title)).toBeNull();
+  expect(tierTitleOf(temp, title)).toBe("T3");
+  expect(plateText("Arriving", null, null, true)).toEqual({ name: "Arriving", rest: "" });
+  expect(plateText("Arriving", null, null, false)).toEqual({ name: "Arriving", rest: "" });
+  const s = emptyState();
+  applySnapshot(s, snap({ repos: [repo("r")], sessions: [arriving, temp] }));
+  const rows = rosterRows(s);
+  const a = rows.find(r => r.id === "a1")!, t = rows.find(r => r.id === "t1")!;
+  expect(a.tier).toBeNull();
+  expect(rosterSub(a, title)).toBe("working");
+  expect(rosterSub(t, title)).toBe("T3 · working");
+  expect(rosterKey(rows, null, title)).not.toContain("T2");
 });

@@ -80,7 +80,10 @@ export function createWorld(init: WorldInit, deps: WorldDeps): World {
     const session: Session = {
       key, source: ev.source, sessionId: ev.sessionId, characterId: null, tempLook: null,
       repoId: repo.id, state: "idle", stateSince: ev.at, model: ev.model ?? null, tier: ev.tier ?? CONFIG.defaultTier,
-      effort: ev.effort ?? null, tierKnown: ev.tier !== undefined, pendingXp: 0, pendingStats: { tasks: 0, tools: 0 },
+      effort: ev.effort ?? null, tierKnown: ev.tier !== undefined,
+      // the grace clock starts at the first prompt; a session first seen mid-way (not at its start) starts it now
+      graceSince: ev.tier === undefined && ev.kind !== "session_start" ? ev.at : null,
+      pendingXp: 0, pendingStats: { tasks: 0, tools: 0 },
       startedAt: ev.at, lastEventAt: ev.at, task: null, lastSummary: null, attention: false, activity: [],
     };
     sessions.set(key, session);
@@ -98,11 +101,12 @@ export function createWorld(init: WorldInit, deps: WorldDeps): World {
   }
 
   /**
-   * Ends a session (SessionEnd or stale). One still waiting for its tier is bound at the default tier and credited
-   * first, so nothing it earned is lost.
+   * Ends a session (SessionEnd or stale). One still waiting for its tier that has earned something is bound at the
+   * default tier and credited first, so nothing is lost; one that earned nothing just leaves, adding no character.
    */
   function endSession(s: Session, at: number, out: Delta[]): void {
-    if (!s.tierKnown) {
+    const held = s.pendingXp > 0 || s.pendingStats.tasks > 0 || s.pendingStats.tools > 0;
+    if (!s.tierKnown && held) {
       bindArrival(s, s.tier, at, out);
       const c = s.characterId === null ? undefined : characters.get(s.characterId);
       out.push(...settle(s, at, false));
@@ -208,7 +212,10 @@ export function createWorld(init: WorldInit, deps: WorldDeps): World {
     if (ev.model !== undefined) s.model = ev.model;
     const tier: Tier = ev.tier ?? s.tier;
     if (!s.tierKnown) {
-      if (ev.tier !== undefined || ev.at - s.startedAt > CONFIG.modelGraceMs) bindArrival(s, tier, ev.at, out);
+      // grace counts only from the first prompt: before it the transcript cannot name a model yet
+      const graceOver = s.graceSince !== null && ev.at - s.graceSince > CONFIG.modelGraceMs;
+      if (ev.tier !== undefined || graceOver) bindArrival(s, tier, ev.at, out);
+      else if (ev.kind === "prompt" && s.graceSince === null) s.graceSince = ev.at;
     } else if (tier !== s.tier) {
       s.tier = tier;
       s.characterId = null;          // release before assigning, so the old character is free again

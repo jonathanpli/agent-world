@@ -15,10 +15,11 @@ const PLATE_H = FONT.h + 2;
 
 /**
  * Plate text. Compact plates carry the name and level ("Ada 3"); the full one ("Ada · Senior · Lv 3") is for the
- * hovered or selected actor. Temps and arrivals have no level, so their compact plate is just "Temp" or "Arriving".
+ * hovered or selected actor. Temps and arrivals have no level, so their compact plate is just "Temp" or "Arriving";
+ * an arrival has no tier title either (`tierTitle` null), so its full plate is just "Arriving" too.
  */
-export function plateText(name: string, level: number | null, tierTitle: string, full: boolean): PlateText {
-  if (full) return { name, rest: ` · ${tierTitle}${level === null ? "" : ` · Lv ${level}`}` };
+export function plateText(name: string, level: number | null, tierTitle: string | null, full: boolean): PlateText {
+  if (full) return { name, rest: `${tierTitle === null ? "" : ` · ${tierTitle}`}${level === null ? "" : ` · Lv ${level}`}` };
   return { name, rest: level === null ? "" : ` ${level}` };
 }
 

@@ -84,10 +84,14 @@ export function createApp(opts: AppOptions): App {
   const readModel = opts.readModel ?? modelFromTranscript;
   const world = createWorld(store.load(), { rng: Math.random, newId: randomUUID });
 
-  /** sessionKey → model, mirrored from session deltas so the pipeline can ask "is the model still unknown?" cheaply. */
-  const sessionModels = new Map(world.snapshot(now(), demo).sessions.map(s => [s.key, s.model]));
-  /** sessionKey → when the transcript was last read for a model. */
-  const modelTriedAt = new Map<string, number>();
+  /**
+   * sessionKey → whether the session still wants its model from the transcript (tier unknown and no model yet),
+   * mirrored from session deltas so the pipeline can ask cheaply. A key not in the map is a new session: it does.
+   */
+  const wantsModel = (s: { tierKnown: boolean; model: string | null }): boolean => !s.tierKnown && s.model === null;
+  const sessionWantsModel = new Map(world.snapshot(now(), demo).sessions.map(s => [s.key, wantsModel(s)]));
+  /** sessionKey → when the transcript was last read for a model, and how many reads so far (capped at CONFIG.modelRetryMax). */
+  const modelTries = new Map<string, { at: number; count: number }>();
   const streams = new Set<ServerResponse>();
   let queue: Promise<void> = Promise.resolve();
   let lastPruneAt = -Infinity;
@@ -95,8 +99,8 @@ export function createApp(opts: AppOptions): App {
   function commit(deltas: Delta[]): void {
     store.persist(deltas);
     for (const d of deltas) {
-      if (d.type === "session") sessionModels.set(d.session.key, d.session.model);
-      else if (d.type === "session_removed") { sessionModels.delete(d.key); modelTriedAt.delete(d.key); }
+      if (d.type === "session") sessionWantsModel.set(d.session.key, wantsModel(d.session));
+      else if (d.type === "session_removed") { sessionWantsModel.delete(d.key); modelTries.delete(d.key); }
     }
     if (deltas.length === 0) return;
     const msg = `event: delta\ndata: ${JSON.stringify(deltas)}\n\n`;
@@ -107,11 +111,11 @@ export function createApp(opts: AppOptions): App {
     ev.repoPath = await within(resolveRepo(ev.repoPath), CONFIG.repoResolveTimeoutMs, ev.repoPath);
     const key = `${ev.source}:${ev.sessionId}`;
     const transcriptPath = ev.detail?.transcriptPath;
-    if (ev.model === undefined && (sessionModels.get(key) ?? null) === null && transcriptPath !== undefined) {
+    if (ev.model === undefined && ev.tier === undefined && (sessionWantsModel.get(key) ?? true) && transcriptPath !== undefined) {
       const t = now();
-      const last = modelTriedAt.get(key);
-      if (last === undefined || t - last >= CONFIG.modelRetryMs) {
-        modelTriedAt.set(key, t);
+      const last = modelTries.get(key);
+      if (last === undefined || (t - last.at >= CONFIG.modelRetryMs && last.count < CONFIG.modelRetryMax)) {
+        modelTries.set(key, { at: t, count: (last?.count ?? 0) + 1 });
         const m = await within(readModel(transcriptPath), CONFIG.modelReadTimeoutMs, null);
         if (m !== null) {
           ev.model = m;

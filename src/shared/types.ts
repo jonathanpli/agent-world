@@ -22,6 +22,7 @@ export type Session = {
   repoId: string; state: Exclude<CharState, "off_duty">; stateSince: number;
   model: string | null; tier: Tier; effort: Effort | null;
   tierKnown: boolean;                // false until an event carries a tier or the grace period ends; unbound until then
+  graceSince: number | null;         // when the grace clock started: the first prompt (or first event if seen mid-session)
   pendingXp: number; pendingStats: { tasks: number; tools: number };   // earned while the tier is unknown, credited on binding
   startedAt: number; lastEventAt: number; task: string | null; lastSummary: string | null;
   attention: boolean; activity: ActivityLine[];

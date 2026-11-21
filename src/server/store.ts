@@ -52,14 +52,14 @@ export function openStore(path: string): Store {
     ON CONFLICT(id) DO UPDATE SET path = excluded.path, name = excluded.name, created_at = excluded.created_at`);
   const upsertSession = db.prepare(`
     INSERT INTO sessions (key, source, session_id, character_id, temp_look, repo_id, state, state_since, model, tier, effort,
-      started_at, last_event_at, task, last_summary, attention, activity, tier_known, pending_xp, pending_stats)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      started_at, last_event_at, task, last_summary, attention, activity, tier_known, pending_xp, pending_stats, grace_since)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     ON CONFLICT(key) DO UPDATE SET source = excluded.source, session_id = excluded.session_id, character_id = excluded.character_id,
       temp_look = excluded.temp_look, repo_id = excluded.repo_id, state = excluded.state, state_since = excluded.state_since,
       model = excluded.model, tier = excluded.tier, effort = excluded.effort, started_at = excluded.started_at,
       last_event_at = excluded.last_event_at, task = excluded.task, last_summary = excluded.last_summary,
       attention = excluded.attention, activity = excluded.activity, tier_known = excluded.tier_known,
-      pending_xp = excluded.pending_xp, pending_stats = excluded.pending_stats`);
+      pending_xp = excluded.pending_xp, pending_stats = excluded.pending_stats, grace_since = excluded.grace_since`);
   const deleteSession = db.prepare("DELETE FROM sessions WHERE key = ?");
   const upsertSetting = db.prepare(`
     INSERT INTO settings (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value`);
@@ -79,7 +79,7 @@ export function openStore(path: string): Store {
     upsertSession.run(
       s.key, s.source, s.sessionId, s.characterId, s.tempLook === null ? null : JSON.stringify(s.tempLook), s.repoId, s.state, s.stateSince,
       s.model, s.tier, s.effort, s.startedAt, s.lastEventAt, s.task, s.lastSummary, s.attention ? 1 : 0, JSON.stringify(s.activity),
-      s.tierKnown ? 1 : 0, s.pendingXp, JSON.stringify(s.pendingStats),
+      s.tierKnown ? 1 : 0, s.pendingXp, JSON.stringify(s.pendingStats), s.graceSince,
     );
   }
 
@@ -116,6 +116,7 @@ export function openStore(path: string): Store {
       repoId: r.repo_id as string, state: r.state as Session["state"], stateSince: r.state_since as number,
       model: r.model as string | null, tier: r.tier as Session["tier"], effort: r.effort as Session["effort"],
       tierKnown: r.tier_known === 1, pendingXp: r.pending_xp as number, pendingStats: JSON.parse(r.pending_stats as string),
+      graceSince: r.grace_since as number | null,
       startedAt: r.started_at as number, lastEventAt: r.last_event_at as number, task: r.task as string | null,
       lastSummary: r.last_summary as string | null, attention: r.attention === 1, activity: JSON.parse(r.activity as string),
     }));

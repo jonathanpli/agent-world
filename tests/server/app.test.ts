@@ -173,6 +173,48 @@ test("a session that never resolves its model joins at the default tier when it 
   expect(s.characters[0]).toMatchObject({ tier: CONFIG.defaultTier, xp: CONFIG.xp.prompt + CONFIG.xp.tool + CONFIG.xp.taskDone });
 });
 
+test("model fallback stops once the tier is known, even if the model never resolved", async () => {
+  let t = 1_000_000; let calls = 0;
+  const { base } = await start({ now: () => t, readModel: async () => { calls++; return null; } });
+  await ingest(base, fx("SessionStart"));
+  t += CONFIG.modelRetryMs; await ingest(base, fx("UserPromptSubmit"));
+  t += CONFIG.modelGraceMs + 1; await ingest(base, fx("PostToolUse"));      // the grace period ends: joins at the default tier
+  const callsAtBind = calls;
+  expect((await snapshot(base)).sessions[0]).toMatchObject({ tierKnown: true, tier: CONFIG.defaultTier });
+  for (let i = 0; i < 3; i++) { t += CONFIG.modelRetryMs; await ingest(base, fx("PostToolUse")); }
+  expect(calls).toBe(callsAtBind);
+});
+
+test("model fallback gives up after CONFIG.modelRetryMax reads for a session that never yields a model", async () => {
+  let t = 1_000_000; let calls = 0;
+  const { base } = await start({ now: () => t, readModel: async () => { calls++; return null; } });
+  await ingest(base, fx("SessionStart")); t += CONFIG.modelRetryMs;       // no prompt follows, so the grace clock never starts
+  for (let i = 0; i < CONFIG.modelRetryMax + 5; i++) { await ingest(base, fx("Notification.synthetic")); t += CONFIG.modelRetryMs; }
+  expect(calls).toBe(CONFIG.modelRetryMax);
+  expect((await snapshot(base)).sessions[0]).toMatchObject({ tierKnown: false, characterId: null });   // no prompt yet: still arriving
+});
+
+test("interactive start: first prompt 20 s after SessionStart, model on the first tool: one character", async () => {
+  let t = 1_000_000; let answer: string | null = null;
+  const { base } = await start({ now: () => t, readModel: async () => answer });
+  await ingest(base, fx("SessionStart"));
+  t += 20_000; await ingest(base, fx("UserPromptSubmit"));
+  expect((await snapshot(base)).characters).toEqual([]);
+  t += 3_000; answer = "claude-opus-5-5"; await ingest(base, fx("PostToolUse"));
+  const s = await snapshot(base);
+  expect(s.characters).toHaveLength(1);
+  expect(s.characters[0]).toMatchObject({ tier: 3, xp: CONFIG.xp.prompt + CONFIG.xp.tool });
+});
+
+test("an arrival that quits at once leaves no character", async () => {
+  const { base } = await start();
+  await ingest(base, fx("SessionStart"));
+  await ingest(base, fx("SessionEnd"));
+  const s = await snapshot(base);
+  expect(s.sessions).toEqual([]);
+  expect(s.characters).toEqual([]);
+});
+
 test("PATCH character", async () => {
   const { base } = await start({ readModel: async () => "claude-sonnet-4-5" });
   await ingest(base, fx("SessionStart"));

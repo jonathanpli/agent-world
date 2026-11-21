@@ -3,20 +3,22 @@ import type { CharState, Tier } from "../../shared/types";
 import { unboundLabel, type ClientState } from "../state";
 import { el, STATE_ICON, STATE_TEXT } from "./dom";
 
-export type RosterRow = { id: string; name: string; tier: Tier; level: number | null; state: CharState; attention: boolean; temp: boolean };
+/** `tier` is null for an arrival still waiting for its tier. */
+export type RosterRow = { id: string; name: string; tier: Tier | null; level: number | null; state: CharState; attention: boolean; temp: boolean };
 
 const rank = (r: RosterRow): number => (r.attention ? 0 : r.state !== "off_duty" ? 1 : 2);
 
 /**
- * One row per non-retired character, plus one per unbound session (a temp, or an arrival waiting for its tier); ids are actor ids (character id, or session key for
- * a temp). Sorted attention first, then live, then off duty; within a group characters come before temps, then by name.
+ * One row per non-retired character, plus one per unbound session (a temp, or an arrival waiting for its tier).
+ * Ids are actor ids: the character id, or the session key for an unbound session. Sorted attention first, then live,
+ * then off duty; within a group characters come before unbound sessions, then by name.
  */
 export function rosterRows(s: ClientState): RosterRow[] {
   const rows: RosterRow[] = [];
   const live = new Map<string, { state: CharState; attention: boolean; tier: Tier }>();
   for (const x of s.sessions.values()) {
     if (x.characterId !== null) { live.set(x.characterId, x); continue; }
-    rows.push({ id: x.key, name: unboundLabel(x), tier: x.tier, level: null, state: x.state, attention: x.attention, temp: true });
+    rows.push({ id: x.key, name: unboundLabel(x), tier: x.tierKnown ? x.tier : null, level: null, state: x.state, attention: x.attention, temp: true });
   }
   for (const c of s.characters.values()) {
     if (c.retired) continue;
@@ -29,7 +31,12 @@ export function rosterRows(s: ClientState): RosterRow[] {
 
 /** What the rendered rows show; the list is rebuilt only when this changes, so a click is not lost to a rebuild. */
 export function rosterKey(rows: RosterRow[], selected: string | null, tierTitle: (t: Tier) => string): string {
-  return JSON.stringify([selected, rows.map(r => [r.id, r.name, tierTitle(r.tier), r.level, r.state, r.attention])]);
+  return JSON.stringify([selected, rows.map(r => [r.id, r.name, r.tier === null ? null : tierTitle(r.tier), r.level, r.state, r.attention])]);
+}
+
+/** The row's sub-line: "Senior · working", or just the state for an arrival, which has no tier title yet. */
+export function rosterSub(r: RosterRow, tierTitle: (t: Tier) => string): string {
+  return r.tier === null ? STATE_TEXT[r.state] : `${tierTitle(r.tier)} · ${STATE_TEXT[r.state]}`;
 }
 
 export type RosterDeps = { state: ClientState; selected(): string | null; select(id: string): void; tierTitle(t: Tier): string };
@@ -55,7 +62,7 @@ export function mount(root: HTMLElement, deps: RosterDeps): { render(): void } {
           el("span", { class: "icon", title: STATE_TEXT[r.state] }, r.attention ? (r.state === "done" ? "✓" : "!") : STATE_ICON[r.state]),
           el("span", { class: "who" },
             el("span", { class: "name" }, r.name),
-            el("span", { class: "sub" }, `${deps.tierTitle(r.tier)} · ${STATE_TEXT[r.state]}`)),
+            el("span", { class: "sub" }, rosterSub(r, deps.tierTitle))),
           r.level === null ? null : el("span", { class: "lv" }, `L${r.level}`));
         if (r.id === sel) button.setAttribute("aria-current", "true");
         return el("li", {}, button);

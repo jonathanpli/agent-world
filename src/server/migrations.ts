@@ -30,5 +30,6 @@ export const MIGRATIONS: string[] = [
   ALTER TABLE sessions ADD COLUMN tier_known INTEGER NOT NULL DEFAULT 1;
   ALTER TABLE sessions ADD COLUMN pending_xp INTEGER NOT NULL DEFAULT 0;
   ALTER TABLE sessions ADD COLUMN pending_stats TEXT NOT NULL DEFAULT '{"tasks":0,"tools":0}';
+  ALTER TABLE sessions ADD COLUMN grace_since INTEGER;
   `,
 ];

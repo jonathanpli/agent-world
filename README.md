@@ -40,11 +40,11 @@ Model decides a character's tier (its seniority), set from the model id:
 | Tier | Model id contains | Office | Space | Underwater |
 |---|---|---|---|---|
 | 1 | `haiku` | Junior | Cadet | Snorkeler |
-| 2 | `sonnet` (also unknown models) | Engineer | Specialist | Scuba diver |
-| 3 | `opus` | Senior | Commander | Technical diver |
-| 4 | `fable`, `mythos` | Principal | Admiral | Master diver |
+| 2 | `sonnet` (also unknown models) | Engineer | Specialist | Diver |
+| 3 | `opus` | Senior | Commander | Tech Diver |
+| 4 | `fable`, `mythos` | Principal | Admiral | Master Diver |
 
-Claude Code does not report the model when a session starts, so Agent World reads it from the session transcript a moment later. Until then the session shows as "Arriving" and holds the XP it earns; it joins the roster at its tier once the model is known (tier 2 if it is still unknown after 15 seconds, or when the session ends), and the held XP is credited then.
+Claude Code does not report the model when a session starts, so Agent World reads it from the session transcript once the model has replied. Until then the session shows as "Arriving", with no tier title, and holds the XP it earns. It joins the roster at its tier as soon as the model is known, and the held XP is credited then. If the model is still unknown 15 seconds after the session's first prompt (or its first event, for a session already running when Agent World started), it joins at tier 2. A session waiting for its first prompt waits as long as it takes. A session that ends while arriving joins at tier 2 if it earned anything; if it earned nothing, it leaves without adding a character.
 
 Tier shows in the costume, the work spot, the name plate and the roster. It does not change XP; level is separate. The reported effort (`low`, `medium`, `high`, `xhigh`, `max`) shows as how intensely a working character animates.
 

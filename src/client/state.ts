@@ -1,5 +1,5 @@
 import { CONFIG } from "../shared/config";
-import type { Character, Delta, Notice, Repo, Session, Settings, Snapshot } from "../shared/types";
+import type { Character, Delta, Notice, Repo, Session, Settings, Snapshot, Tier } from "../shared/types";
 
 /** The browser's mirror of the server's world, fed by the SSE snapshot and deltas. */
 export type ClientState = {
@@ -56,6 +56,11 @@ export function activeRepos(s: ClientState): Repo[] {
  */
 export function unboundLabel(s: Session): string {
   return s.tierKnown ? "Temp" : "Arriving";
+}
+
+/** The session's tier title, or null while it waits for its tier (an arrival has no seniority yet). */
+export function tierTitleOf(s: Session, title: (t: Tier) => string): string | null {
+  return s.tierKnown ? title(s.tier) : null;
 }
 
 export function sessionOf(s: ClientState, characterId: string): Session | undefined {

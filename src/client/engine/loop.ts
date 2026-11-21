@@ -21,7 +21,8 @@ export type Engine = {
 };
 
 /** What an actor is right now, resolved from the state each frame. */
-type Who = { look: Look; tier: Tier; state: CharState; effort: Effort; since: number; name: string; level: number | null; attention: boolean };
+/** `titleTier` is null for an arrival: drawn at the default tier, but its plate names no seniority. */
+type Who = { look: Look; tier: Tier; titleTier: Tier | null; state: CharState; effort: Effort; since: number; name: string; level: number | null; attention: boolean };
 
 const EFFORTS = new Set<string>(["low", "medium", "high", "xhigh", "max"]);
 const effortOf = (e: string | null): Effort => (e !== null && EFFORTS.has(e) ? (e as Effort) : "medium");
@@ -33,13 +34,13 @@ function resolve(state: ClientState): Map<string, Who> {
     const look = c?.look ?? s.tempLook;
     if (look === null || look === undefined) continue;
     out.set(s.characterId ?? s.key, {
-      look, tier: s.tier, state: s.state, effort: effortOf(s.effort), since: s.stateSince,
+      look, tier: s.tier, titleTier: s.tierKnown ? s.tier : null, state: s.state, effort: effortOf(s.effort), since: s.stateSince,
       name: c?.name ?? unboundLabel(s), level: c === undefined ? null : levelForXp(c.xp), attention: s.attention,
     });
   }
   for (const c of state.characters.values()) {
     if (c.retired || out.has(c.id)) continue;
-    out.set(c.id, { look: c.look, tier: c.tier, state: "off_duty", effort: "medium", since: c.lastActiveAt, name: c.name, level: levelForXp(c.xp), attention: false });
+    out.set(c.id, { look: c.look, tier: c.tier, titleTier: c.tier, state: "off_duty", effort: "medium", since: c.lastActiveAt, name: c.name, level: levelForXp(c.xp), attention: false });
   }
   return out;
 }
@@ -198,11 +199,11 @@ export function startEngine(canvas: HTMLCanvasElement, state: ClientState): Engi
       drawParticles(ctx, particles);
 
       // compact plates for everyone; the hovered and selected actors get the full plate, drawn last so it sits on top
-      const title = (tier: Tier): string => active.tierTitles[tier] ?? fallback.tierTitles[tier];
+      const title = (tier: Tier | null): string | null => (tier === null ? null : active.tierTitles[tier] ?? fallback.tierTitles[tier]);
       const focus = (id: string): boolean => id === hovered || id === selected;
-      const full = drawn.filter(d => focus(d.id)).map(d => ({ at: d.at, text: plateText(d.w.name, d.w.level, title(d.w.tier), true) }));
+      const full = drawn.filter(d => focus(d.id)).map(d => ({ at: d.at, text: plateText(d.w.name, d.w.level, title(d.w.titleTier), true) }));
       const fullRects = layoutPlates(full);
-      const compact = drawn.filter(d => !focus(d.id)).map(d => ({ at: d.at, text: plateText(d.w.name, d.w.level, title(d.w.tier), false) }));
+      const compact = drawn.filter(d => !focus(d.id)).map(d => ({ at: d.at, text: plateText(d.w.name, d.w.level, title(d.w.titleTier), false) }));
       layoutPlates(compact, fullRects).forEach((r, i) => drawPlate(ctx, r, compact[i]!.text));
       for (const d of drawn) if (d.w.attention) drawBubble(ctx, d.at, d.w.state === "needs_input" ? "alert" : "done", t);
       const sel = drawn.find(d => d.id === selected);

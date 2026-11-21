@@ -5,7 +5,7 @@ import { ACCESSORIES, BODY_COLORS, HAIR_COLORS, HAIR_STYLES, HATS, SKIN_TONES, u
 import type { Character, Look, Session, Tier } from "../../shared/types";
 import { safeDraw, THEMES, type Theme } from "../engine/theme";
 import { api } from "../net";
-import { sessionOf, unboundLabel, type ClientState } from "../state";
+import { sessionOf, tierTitleOf, unboundLabel, type ClientState } from "../state";
 import { attempt, el, STATE_TEXT } from "./dom";
 
 /** "45s", "12m", "3h 05m". Negative spans count as zero. */
@@ -142,9 +142,9 @@ export function mount(root: HTMLElement, deps: InspectorDeps): { render(explicit
         nameBox.replaceChildren(b);
       }
     }
-    const tier = c?.tier ?? s!.tier;
+    const tierTitle = c !== undefined ? deps.tierTitle(c.tier) : tierTitleOf(s!, deps.tierTitle) ?? "—";
     meta.replaceChildren(
-      el("span", { class: "tier" }, deps.tierTitle(tier)),
+      el("span", { class: "tier" }, tierTitle),
       el("span", { class: "model", title: "Model" }, s?.model ?? "model unknown"));
     if (c === undefined) {
       xpLine.replaceChildren(el("span", { class: "dim" }, s!.tierKnown ? "Contractor: earns no XP" : "Arriving: XP is held until the model is known"));
