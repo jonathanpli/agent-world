@@ -74,7 +74,9 @@ test("ignores ~/.curlrc and stays executable", async () => {
   const port = (server.address() as AddressInfo).port;
   const home = mkdtempSync(join(tmpdir(), "aw-curlrc-"));
   writeFileSync(join(home, ".curlrc"), 'header = "X-From-Curlrc: yes"\n');
-  const child = spawn("sh", ["hooks/forward.sh"], { env: { ...process.env, HOME: home, AGENT_WORLD_PORT: String(port) }, stdio: ["pipe", "ignore", "ignore"] });
+  // curl looks for .curlrc in CURL_HOME and XDG_CONFIG_HOME before HOME: clear them so the planted file is the one it would read
+  const { CURL_HOME: _c, XDG_CONFIG_HOME: _x, ...env } = process.env;
+  const child = spawn("sh", ["hooks/forward.sh"], { env: { ...env, HOME: home, AGENT_WORLD_PORT: String(port) }, stdio: ["pipe", "ignore", "ignore"] });
   child.stdin.end("{}");
   const deadline = Date.now() + 2000;
   while (headers.length === 0 && Date.now() < deadline) await new Promise(r => setTimeout(r, 20));

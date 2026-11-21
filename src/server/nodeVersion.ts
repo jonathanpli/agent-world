@@ -5,5 +5,5 @@ const MIN: readonly [number, number] = [22, 13];
 export function nodeVersionProblem(version: string): string | null {
   const [major = 0, minor = 0] = version.replace(/^v/, "").split(".").map(Number);
   if (major > MIN[0] || (major === MIN[0] && minor >= MIN[1])) return null;
-  return `Agent World needs Node ${MIN[0]}.${MIN[1]} or newer (this is ${version}). Run \`nvm use\` in the project directory, or install Node 22.`;
+  return `Agent World needs Node ${MIN[0]}.${MIN[1]} or newer (this is ${version}). Run \`nvm use\` in the project directory, or install Node 22.13 or newer.`;
 }

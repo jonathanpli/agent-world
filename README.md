@@ -4,7 +4,7 @@ A local browser idle game that shows your Claude Code agents as pixel-art charac
 
 ## Requirements
 
-Node 22.13 or newer (`.nvmrc`; run `nvm use`). The server stops with a message on older versions.
+Node 22.13 or newer. `.nvmrc` names the Node 22 LTS line (`lts/jod`); run `nvm use`. The server stops with a message on older versions.
 
 ## Quick start
 
