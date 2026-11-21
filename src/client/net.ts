@@ -1,5 +1,5 @@
 import { CONFIG } from "../shared/config";
-import type { Character, Delta, Settings, Snapshot } from "../shared/types";
+import type { Character, Delta, Recap, Settings, Snapshot } from "../shared/types";
 
 type Handlers = { onSnapshot(s: Snapshot): void; onDeltas(d: Delta[]): void; onStatus(connected: boolean): void };
 
@@ -42,5 +42,6 @@ export const api = {
   patchCharacter: (id: string, patch: object): Promise<Character> => call("PATCH", `/api/characters/${encodeURIComponent(id)}`, patch),
   ack: (key: string): Promise<void> => call("POST", `/api/sessions/${encodeURIComponent(key)}/ack`),
   dismiss: (key: string): Promise<void> => call("POST", `/api/sessions/${encodeURIComponent(key)}/dismiss`),
+  recap: (day?: string): Promise<Recap> => call("GET", day === undefined ? "/api/recap" : `/api/recap?day=${encodeURIComponent(day)}`),
   putSettings: (patch: Partial<Settings>): Promise<Settings> => call("PUT", "/api/settings", patch),
 };

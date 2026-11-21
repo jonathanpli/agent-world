@@ -53,7 +53,8 @@ select, button {
 }
 
 button { cursor: pointer; }
-#open-settings { margin-left: auto; font-size: 16px; line-height: 1; padding: 4px 8px; }
+#open-recap { margin-left: auto; }
+#open-settings { font-size: 16px; line-height: 1; padding: 4px 8px; }
 
 .attention:empty { display: none; }
 
@@ -174,6 +175,7 @@ button.danger { border-color: var(--warn); color: var(--warn); }
   cursor: pointer;
   animation: toast-in 160ms ease-out;
 }
+.toast.info { border-left-color: var(--dim); }
 .toast.needs_input { border-left-color: var(--warn); }
 @keyframes toast-in { from { opacity: 0; transform: translateY(-6px); } }
 @media (prefers-reduced-motion: reduce) { .toast { animation: none; } }
@@ -277,6 +279,27 @@ table.history .num { text-align: right; font-variant-numeric: tabular-nums; }
 .notify-row { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; padding-top: 8px; border-top: 1px solid var(--line); }
 .notify-row .perm { color: var(--dim); font-size: 13px; }
 .settings-form .actions { justify-content: flex-end; }
+
+/* ---- recap dialog ---- */
+#recap {
+  width: min(380px, calc(100vw - 32px));
+  padding: 0;
+  color: var(--text);
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  box-shadow: 0 20px 60px rgb(0 0 0 / 60%);
+}
+#recap::backdrop { background: rgb(10 6 14 / 60%); }
+.recap-card { display: flex; flex-direction: column; gap: 12px; padding: 18px 20px; }
+.recap-card h2 { margin: 0; }
+.recap-nav { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.recap-day { font-variant-numeric: tabular-nums; }
+.recap-body p { margin: 4px 0; }
+.recap-headline { list-style: none; margin: 0 0 8px; padding: 0; font-size: 16px; display: flex; flex-direction: column; gap: 2px; }
+.recap-mvp { display: flex; align-items: center; gap: 8px; }
+.recap-sprite { image-rendering: pixelated; }
+.recap-streak { color: var(--accent); font-weight: 600; }
 
 .attention { color: var(--warn); font-weight: 600; }
 

@@ -1,9 +1,11 @@
 import { startEngine } from "./engine/loop";
-import { getTheme, THEMES } from "./engine/theme";
+import { CONFIG } from "../shared/config";
+import { getTheme, safeDraw, THEMES } from "./engine/theme";
 import { api, connect } from "./net";
 import { attentionCount, deliver, tabTitle } from "./notify";
 import { applyDeltas, applySnapshot, emptyState } from "./state";
 import { mount as mountInspector } from "./ui/inspector";
+import { localDay, mount as mountRecap, nudgeText, shouldNudge } from "./ui/recap";
 import { mount as mountRoster } from "./ui/roster";
 import { mount as mountSettings } from "./ui/settings";
 import { mount as mountTicker } from "./ui/ticker";
@@ -20,6 +22,7 @@ const demoBadge = $("demo");
 const attention = $("attention");
 const inspectorRoot = $("inspector");
 const settingsDialog = $<HTMLDialogElement>("settings");
+const recapDialog = $<HTMLDialogElement>("recap");
 
 const engine = startEngine(canvas, state);
 let selected: string | null = null;
@@ -31,6 +34,34 @@ const inspector = mountInspector(inspectorRoot, { state, selected: () => selecte
 const ticker = mountTicker($("ticker"), { state });
 const settings = mountSettings(settingsDialog, { state });
 const toasts = mountToasts($("toasts"));
+
+/** Draws a character's sprite onto a small canvas, as the inspector's Look tab does; does nothing for one this browser has no data on. */
+function drawSprite(cv: HTMLCanvasElement, characterId: string): void {
+  const c = state.characters.get(characterId);
+  if (c === undefined) return;
+  cv.width = 32; cv.height = 40;
+  cv.style.width = `${cv.width * CONFIG.client.previewScale}px`;
+  cv.style.height = `${cv.height * CONFIG.client.previewScale}px`;
+  const ctx = cv.getContext("2d");
+  if (ctx === null) return;
+  ctx.imageSmoothingEnabled = false;
+  safeDraw(getTheme(state.settings.theme), THEMES[0]!, t => t.drawCharacter(ctx, { x: 16, y: 36 }, c.look, c.tier, "off_duty", "medium", 0, 1, false), ctx);
+}
+const recap = mountRecap(recapDialog, { state, drawSprite });
+const NUDGE_KEY = "agent-world:recap-nudge";
+
+/** Once per local day, a toast about yesterday that opens the recap card. No system notification. */
+async function morningNudge(): Promise<void> {
+  const today = localDay();
+  let last: string | null = null;
+  try { last = localStorage.getItem(NUDGE_KEY); } catch { /* storage unavailable */ }
+  if (!shouldNudge(today, last)) return;
+  const yesterday = localDay(new Date(), 1);
+  const r = await api.recap(yesterday);
+  try { localStorage.setItem(NUDGE_KEY, today); } catch { /* storage unavailable */ }
+  const text = nudgeText(r);
+  if (text !== null) toasts.showText(text, () => recap.open(yesterday));
+}
 
 for (const t of THEMES) themeSelect.add(new Option(t.name, t.id));
 let appliedTheme: string | null = null;
@@ -46,6 +77,7 @@ themeSelect.addEventListener("change", () => {
   });
 });
 
+$("open-recap").addEventListener("click", () => recap.open());
 $("open-settings").addEventListener("click", () => {
   settings.render();
   settingsDialog.showModal();
@@ -114,3 +146,4 @@ connect({
   },
 });
 sync();
+morningNudge().catch(e => console.error("agent-world: recap nudge failed", e));
