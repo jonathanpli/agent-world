@@ -1,12 +1,12 @@
 import { describe, expect, test } from "vitest";
-import { CHAT_ICONS, CHAT_TURN_S, createSocial, eligibleForChat, socialSpotsOf, speaker, type Chat } from "../../src/client/engine/social";
+import { CHAT_ARRIVE_S, CHAT_ICONS, CHAT_TURN_S, createSocial, eligibleForChat, reactionFor, socialSpotsOf, speaker, type Chat } from "../../src/client/engine/social";
 import { THEMES } from "../../src/client/engine/theme";
 import { mulberry32 } from "../../src/shared/rng";
 
 const SPOTS = [{ x: 40, y: 200 }, { x: 80, y: 210 }, { x: 120, y: 205 }];
 const ids = (n: number): string[] => Array.from({ length: n }, (_, i) => `a${i}`);
 
-/** Steps a social at 10 Hz from 0 to `until` s; `eligibleAt(t)` gives who may chat. Records each chat's start and end. */
+/** Steps a social at 10 Hz from 0 to `until` s; `eligibleAt(t)` gives who may chat. Pairs arrive at once. Records each chat's start and end. */
 function run(until: number, eligibleAt: (t: number) => string[], seed = 1) {
   const social = createSocial();
   const rng = mulberry32(seed);
@@ -15,6 +15,7 @@ function run(until: number, eligibleAt: (t: number) => string[], seed = 1) {
   for (let i = 0; i <= until * 10; i++) {
     const t = i / 10;
     social.step(t, eligibleAt(t), rng, SPOTS);
+    for (const c of social.chats()) social.arrived(c, t);
     const now = new Set(social.chats());
     for (const [c, rec] of open) if (!now.has(c)) { rec.end = t; open.delete(c); }
     for (const c of now) if (!open.has(c)) { const rec = { chat: c, start: t, end: null }; open.set(c, rec); log.push(rec); }
@@ -124,7 +125,7 @@ test("reacting is true for 1.5 s, then false", () => {
 });
 
 test("the two talkers take turns with the bubble, each with its own icon", () => {
-  const chat: Chat = { a: "x", b: "y", spot: { x: 0, y: 0 }, until: 100, icons: [2, 4] };
+  const chat: Chat = { a: "x", b: "y", spot: { x: 0, y: 0 }, until: 100, icons: [2, 4], createdAt: 0, lasts: 8 };
   expect(speaker(chat, 0)).toEqual({ id: "x", icon: 2 });
   expect(speaker(chat, CHAT_TURN_S + 0.01)).toEqual({ id: "y", icon: 4 });
   expect(speaker(chat, 2 * CHAT_TURN_S + 0.01)).toEqual({ id: "x", icon: 2 });
@@ -151,4 +152,51 @@ describe("socialSpotsOf", () => {
     const bad = { lounge, get socialSpots(): never { throw new Error("boom"); } };
     expect(socialSpotsOf(bad)).toEqual([]);
   });
+});
+
+/** Steps until a chat starts between "x" and "y"; returns it and the time. */
+function firstChat(seed: number) {
+  const social = createSocial();
+  const rng = mulberry32(seed);
+  let t = 0;
+  while (social.chats().length === 0 && t < 120) { t += 0.1; social.step(t, ["x", "y"], rng, SPOTS); }
+  return { social, rng, t, chat: social.chats()[0]! };
+}
+
+describe("talking time counts from arrival", () => {
+  test("until stays open while the pair walks, then runs 6–10 s from when both arrive", () => {
+    const { social, rng, t, chat } = firstChat(3);
+    expect(chat.until).toBe(Infinity);
+    for (let s = t; s < t + 25; s += 0.1) social.step(s, ["x", "y"], rng, SPOTS);   // a long walk: 25 s
+    expect(social.chats()).toContain(chat);
+    const arrival = t + 25;
+    social.arrived(chat, arrival);
+    expect(chat.until).toBeCloseTo(arrival + chat.lasts, 6);
+    expect(chat.lasts >= 6 && chat.lasts <= 10).toBe(true);
+    social.arrived(chat, arrival + 3);                                             // later frames do not move it
+    expect(chat.until).toBeCloseTo(arrival + chat.lasts, 6);
+    social.step(arrival + chat.lasts - 0.1, ["x", "y"], rng, SPOTS);
+    expect(social.chats()).toContain(chat);
+    social.step(arrival + chat.lasts, ["x", "y"], rng, SPOTS);
+    expect(social.chats()).toHaveLength(0);
+  });
+
+  test("a pair that has not both arrived within 30 s is dropped, and the next attempt counts from then", () => {
+    const { social, rng, t, chat } = firstChat(5);
+    social.step(t + CHAT_ARRIVE_S - 0.1, ["x", "y"], rng, SPOTS);
+    expect(social.chats()).toContain(chat);
+    const end = t + CHAT_ARRIVE_S;
+    social.step(end, ["x", "y"], rng, SPOTS);
+    expect(social.chats()).toHaveLength(0);
+    let s = end;
+    while (social.chats().length === 0 && s < end + 120) { s += 0.1; social.step(s, ["x", "y"], rng, SPOTS); }
+    expect(s - end).toBeGreaterThanOrEqual(20);
+    expect(s - end).toBeLessThanOrEqual(60.1);
+  });
+});
+
+test("reactionFor: needs_input never reacts, working glances, the rest cheer", () => {
+  expect(reactionFor("needs_input")).toBe("none");
+  expect(reactionFor("working")).toBe("glance");
+  for (const s of ["idle", "done", "off_duty"] as const) expect(reactionFor(s)).toBe("cheer");
 });

@@ -11,7 +11,7 @@ import { createFader } from "./fade";
 import { drawParticles, stepParticles } from "./particles";
 import { rect } from "./pixels";
 import { createSelection } from "./selection";
-import { CHAT_ICONS, createSocial, eligibleForChat, socialSpotsOf, speaker, type Chat } from "./social";
+import { CHAT_ICONS, createSocial, eligibleForChat, reactionFor, socialSpotsOf, speaker, type Chat } from "./social";
 import { getTheme, safeDraw, THEMES, VIEW, type Particle, type Point, type Rect, type Theme } from "./theme";
 
 export type Engine = {
@@ -20,7 +20,7 @@ export type Engine = {
   /** Switches theme with a short fade to black and back; `instant` skips the fade (the first theme the server sends). */
   setTheme(id: string, opts?: { instant?: boolean }): void;
   burst(kind: "celebrate" | "levelUp", actorId: string): void;
-  /** Others at work in the same repo place as `actorId` react to it finishing or levelling up: a cheer, or a glance if working. */
+  /** Others in the same repo place as `actorId` react to it finishing or levelling up: a cheer, a glance if working, nothing if it needs you. */
   react(actorId: string): void;
   /** Where an actor stands across its screen, 0 (left edge) to 1 (right edge); null if it has no actor. */
   screenX(actorId: string): number | null;
@@ -178,6 +178,7 @@ export function startEngine(canvas: HTMLCanvasElement, state: ClientState): Engi
       if (pa === undefined || pb === undefined || !standing(pa) || !standing(pb)) continue;
       pa.facing = pb.pos.x >= pa.pos.x ? 1 : -1;
       pb.facing = pa.facing === 1 ? -1 : 1;
+      social.arrived(c, t);                                 // the talking time starts now, not when the chat began
       talking.push(c);
     }
 
@@ -251,13 +252,15 @@ export function startEngine(canvas: HTMLCanvasElement, state: ClientState): Engi
         if (w === undefined) continue;
         const phase = (a.id.length * 0.7) % (Math.PI * 2);
         const at = { x: Math.round(a.pos.x), y: Math.round(a.pos.y + Math.sin(t * Math.PI * 2 * bob.hz + phase) * bob.px) };
-        // a reaction: a working actor glances toward the one it reacts to; anyone else standing still cheers
+        // a reaction: a working actor glances toward the one it reacts to; one that needs you keeps its pose;
+        // anyone else standing still cheers
         let pose = w.state, f = Math.floor(anim.get(a.id)?.frame ?? 0), facing = a.facing;
         const glance = glances.get(a.id);
-        if (glance !== undefined && w.state === "working") {
+        const how = glance === undefined ? "none" : reactionFor(w.state);
+        if (glance !== undefined && how === "glance") {
           const to = actors.get(glance.toward);
           if (to !== undefined && to.pos.x !== a.pos.x) facing = to.pos.x > a.pos.x ? 1 : -1;
-        } else if (glance !== undefined && !a.moving) {
+        } else if (glance !== undefined && how === "cheer" && !a.moving) {
           pose = "done";
           f = Math.floor(Math.max(0, t - glance.at) * CONFIG.client.animFps);
         }

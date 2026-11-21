@@ -6,6 +6,8 @@ export const CHAT_EVERY_S: readonly [number, number] = [20, 60];
 export const CHAT_LASTS_S: readonly [number, number] = [6, 10];
 export const CHATS_MAX = 2;
 export const REACTION_S = 1.5;
+/** A pair that has not both arrived this long after the chat began is dropped, freeing its slot. */
+export const CHAT_ARRIVE_S = 30;
 /** Each talker stands this many px either side of the chat's spot; the talkers take turns of this many seconds. */
 const CHAT_HALF_GAP = 7;
 export const CHAT_TURN_S = 1.2;
@@ -19,15 +21,26 @@ export const CHAT_ICONS: readonly (readonly string[])[] = [
   [".###.", "#...#", "..##.", ".....", "..#.."],
 ];
 
-/** Two actors talking at `spot` until `until` (engine seconds); `icons` index CHAT_ICONS, one per talker. */
-export type Chat = { a: string; b: string; spot: Point; until: number; icons: [number, number] };
+/**
+ * Two actors talking at `spot` until `until` (engine seconds); `icons` index CHAT_ICONS, one per talker. The talking
+ * time (`lasts` s) counts from when both have arrived: until then `until` is Infinity, and a pair still apart
+ * CHAT_ARRIVE_S after `createdAt` is dropped.
+ */
+export type Chat = { a: string; b: string; spot: Point; until: number; icons: [number, number]; createdAt: number; lasts: number };
 export type Social = {
   step(t: number, eligible: string[], rng: () => number, spots: Point[]): void;   // t in seconds
   chats(): readonly Chat[];
   targetFor(actorId: string): Point | null;       // where a chatting actor should stand; null = not chatting
   react(actorIds: string[], t: number): void;     // start a 1.5 s reaction
   reacting(actorId: string, t: number): boolean;
+  /** Both talkers of `chat` stand at their points: the first call starts its talking time. */
+  arrived(chat: Chat, t: number): void;
 };
+
+/** How a character reacts to a neighbour finishing: never while it needs you, a glance while working, else a cheer. */
+export function reactionFor(state: CharState): "none" | "glance" | "cheer" {
+  return state === "needs_input" ? "none" : state === "working" ? "glance" : "cheer";
+}
 
 /** Off duty, or idle/done without attention; never the selected character. */
 export function eligibleForChat(state: CharState, attention: boolean, selected: boolean): boolean {
@@ -67,7 +80,8 @@ export function createSocial(): Social {
       const ok = new Set(eligible);
       // a chat ends when it runs out or either talker stops being eligible; both then wait for their next attempt
       chats = chats.filter(c => {
-        if (t < c.until && ok.has(c.a) && ok.has(c.b)) return true;
+        const waiting = c.until === Infinity && t - c.createdAt >= CHAT_ARRIVE_S;
+        if (t < c.until && !waiting && ok.has(c.a) && ok.has(c.b)) return true;
         for (const id of [c.a, c.b]) if (ok.has(id)) nextTry.set(id, t + between(CHAT_EVERY_S, rng));
         return false;
       });
@@ -88,7 +102,7 @@ export function createSocial(): Social {
         const spot = pool[Math.floor(rng() * pool.length)]!;
         const first = Math.floor(rng() * CHAT_ICONS.length);
         const second = (first + 1 + Math.floor(rng() * (CHAT_ICONS.length - 1))) % CHAT_ICONS.length;
-        chats.push({ a: id, b: partner, spot, until: t + between(CHAT_LASTS_S, rng), icons: [first, second] });
+        chats.push({ a: id, b: partner, spot, until: Infinity, createdAt: t, lasts: between(CHAT_LASTS_S, rng), icons: [first, second] });
       }
     },
     chats: () => chats,
@@ -97,6 +111,9 @@ export function createSocial(): Social {
       if (c === undefined) return null;
       const dx = c.a === actorId ? -CHAT_HALF_GAP : CHAT_HALF_GAP;
       return { x: Math.round(c.spot.x + dx), y: Math.round(c.spot.y) };
+    },
+    arrived(chat, t) {
+      if (chat.until === Infinity && chats.includes(chat)) chat.until = t + chat.lasts;
     },
     react(actorIds, t) {
       for (const id of actorIds) reactions.set(id, t + REACTION_S);
