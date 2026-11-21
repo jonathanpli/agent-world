@@ -3,7 +3,9 @@ import type { AgentEvent, Effort, Tier } from "../shared/types";
 import type { Adapter } from "./index";
 
 const EFFORTS: readonly string[] = ["low", "medium", "high", "xhigh", "max"];
-const NEEDS_INPUT_TYPES: readonly string[] = ["permission_prompt", "idle_prompt", "elicitation_dialog", "agent_needs_input"];
+const NEEDS_INPUT_TYPES: Readonly<Record<string, "idle" | "blocking">> = {
+  permission_prompt: "blocking", idle_prompt: "idle", elicitation_dialog: "blocking", agent_needs_input: "blocking",
+};
 const TIER_MATCHERS: readonly (readonly [string, Tier])[] = [["haiku", 1], ["sonnet", 2], ["opus", 3], ["fable", 4], ["mythos", 4]];
 
 /** The tier for a model id; an id that matches none is the default tier. Missing, empty and placeholder ids such as "<synthetic>" are unknown. */
@@ -53,13 +55,15 @@ function parse(raw: unknown, now: number): AgentEvent[] {
       }
       case "Notification": {
         const type = str(raw.notification_type);
-        if (type === undefined || !NEEDS_INPUT_TYPES.includes(type)) return [];
-        return ev("needs_input", {}, { reason: str(raw.message) ?? "" });
+        const inputKind = type !== undefined && Object.hasOwn(NEEDS_INPUT_TYPES, type) ? NEEDS_INPUT_TYPES[type] : undefined;
+        if (inputKind === undefined) return [];
+        return ev("needs_input", { inputKind }, { reason: str(raw.message) ?? "" });
       }
       case "Stop": {
-        if (raw.stop_hook_active === true) return [];    // re-fired after another Stop hook blocked it: not a new finish
+        // stop_hook_active: the end of a continuation a blocking Stop hook forced; the turn's finish was already counted
+        const repeat = raw.stop_hook_active === true;
         const last = str(raw.last_assistant_message);
-        return ev("task_done", { ...(effort && { effort }) }, last !== undefined ? { summary: last.slice(0, CONFIG.textMax) } : {});
+        return ev("task_done", { ...(effort && { effort }), ...(repeat && { repeat: true as const }) }, last !== undefined ? { summary: last.slice(0, CONFIG.textMax) } : {});
       }
       case "PostModelSwitch": {
         const model = str(raw.to_model);

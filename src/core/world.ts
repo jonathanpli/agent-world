@@ -154,8 +154,8 @@ export function createWorld(init: WorldInit, deps: WorldDeps): World {
       w.earned += gain;
       session.pendingXp += gain;
     } else if (ev.kind === "prompt") session.pendingXp += CONFIG.xp.prompt;
-    else if (ev.kind === "task_done") { session.pendingXp += CONFIG.xp.taskDone; session.pendingStats.tasks++; }
-    return settle(session, ev.at, ev.kind === "task_done");
+    else if (ev.kind === "task_done" && ev.repeat !== true) { session.pendingXp += CONFIG.xp.taskDone; session.pendingStats.tasks++; }
+    return settle(session, ev.at, ev.kind === "task_done" && ev.repeat !== true);
   }
 
   /**
@@ -205,10 +205,9 @@ export function createWorld(init: WorldInit, deps: WorldDeps): World {
 
     const out: Delta[] = [];
     const repo = repoFor(ev.repoPath, ev.at, out);
-    const created = s === undefined;
     if (s === undefined) s = createSession(ev, key, repo, out);
-    // Claude Code's idle_prompt arrives about a minute after a session stops: at rest it is only an activity line
-    const atRest = !created && (s.state === "done" || s.state === "idle");
+    // an idle-type nudge (Claude Code's idle_prompt, about a minute after it starts waiting) is only an activity line at rest
+    const idleNudge = ev.kind === "needs_input" && ev.inputKind === "idle" && (s.state === "done" || s.state === "idle");
 
     s.repoId = repo.id;
     s.lastEventAt = ev.at;
@@ -232,12 +231,14 @@ export function createWorld(init: WorldInit, deps: WorldDeps): World {
       case "prompt": setState(s, "working", ev.at); s.attention = false; s.task = ev.detail?.text ?? null; break;
       case "tool": setState(s, "working", ev.at); s.attention = false; break;
       case "needs_input":
-        if (atRest) break;
+        if (idleNudge) break;
         setState(s, "needs_input", ev.at); s.attention = true; notices.push(...notice(s, "needs_input", ev.at, repo));
         break;
       case "task_done":
-        setState(s, "done", ev.at); s.attention = true;
+        setState(s, "done", ev.at);
         if (ev.detail?.summary !== undefined) s.lastSummary = ev.detail.summary;
+        if (ev.repeat) break;          // attention left as it is: not re-raised after an ack, not cleared
+        s.attention = true;
         notices.push(...notice(s, "done", ev.at, repo));
         break;
       case "model_change": break;

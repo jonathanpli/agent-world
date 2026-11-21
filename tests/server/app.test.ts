@@ -452,3 +452,21 @@ test("an unrecognised model id binds at the default tier at once, keeping the mo
   expect(s).toMatchObject({ tierKnown: true, tier: CONFIG.defaultTier, model: "gpt-9-turbo" });
   expect(s.characterId).not.toBeNull();
 });
+
+test("blocking Stop hook round trip: repeat Stop and idle_prompt go through ingest, SSE and the store without a warning or a second notice", async () => {
+  const warn = vi.spyOn(console, "warn");
+  const { base, store } = await start({ readModel: async () => "claude-sonnet-4-5" });
+  const next = await openStream(base);
+  await next();
+  const idle = JSON.stringify({ ...JSON.parse(fx("Notification.synthetic")), notification_type: "idle_prompt", message: "Claude is waiting for your input" });
+  const deltas: Delta[] = [];
+  for (const body of [fx("SessionStart"), fx("Stop"), fx("PostToolUse"), fx("Stop.hookActive.synthetic"), idle]) {
+    await ingest(base, body);
+    deltas.push(...((await next()).data as Delta[]));
+  }
+  expect(deltas.flatMap(d => (d.type === "notice" ? [d.notice.kind] : [])).filter(k => k === "done" || k === "needs_input")).toEqual(["done"]);
+  expect((await snapshot(base)).sessions[0]).toMatchObject({ state: "done" });
+  expect(store.load().sessions[0]).toMatchObject({ state: "done" });
+  expect(store.eventCount()).toBe(5);
+  expect(warn).not.toHaveBeenCalled();
+});

@@ -27,7 +27,9 @@ describe("claudeCode adapter", () => {
   test("effort ignored when not a known level", () => { expect(claudeCode.parse({ ...fx("PostToolUse"), effort: { level: "ludicrous" } }, 0)[0].effort).toBeUndefined(); });
   test("Notification types", () => {
     const base = fx("Notification.synthetic");
-    for (const t of ["permission_prompt", "idle_prompt", "elicitation_dialog", "agent_needs_input"]) expect(claudeCode.parse({ ...base, notification_type: t }, 0)[0].kind).toBe("needs_input");
+    for (const [t, inputKind] of [["permission_prompt", "blocking"], ["idle_prompt", "idle"], ["elicitation_dialog", "blocking"], ["agent_needs_input", "blocking"]]) {
+      expect(claudeCode.parse({ ...base, notification_type: t }, 0)[0]).toMatchObject({ kind: "needs_input", inputKind });
+    }
     for (const t of ["auth_success", "agent_completed", undefined]) expect(claudeCode.parse({ ...base, notification_type: t }, 0)).toEqual([]);
     expect(claudeCode.parse(base, 0)[0].detail).toMatchObject({ reason: base.message });
   });
@@ -40,9 +42,12 @@ describe("claudeCode adapter", () => {
       .toEqual([1,2,3,4,4,2,undefined,undefined,undefined]);
   });
   test("SessionStart with an unrecognised model binds at the default tier", () => { expect(claudeCode.parse({ ...fx("SessionStart"), model: "gpt-x" }, 0)[0]).toMatchObject({ model: "gpt-x", tier: 2 }); });
-  test("a Stop re-fired by a blocking Stop hook (stop_hook_active) produces no task_done", () => {
+  test("a Stop after a blocking Stop hook's continuation (stop_hook_active) is a repeat task_done", () => {
     expect(fx("Stop.hookActive.synthetic").stop_hook_active).toBe(true);
-    expect(claudeCode.parse(fx("Stop.hookActive.synthetic"), 0)).toEqual([]);
-    expect(claudeCode.parse({ ...fx("Stop"), stop_hook_active: false }, 0)[0]!.kind).toBe("task_done");
+    const [again] = claudeCode.parse(fx("Stop.hookActive.synthetic"), 0);
+    expect(again).toMatchObject({ kind: "task_done", repeat: true, detail: { summary: fx("Stop.hookActive.synthetic").last_assistant_message } });
+    const [first] = claudeCode.parse({ ...fx("Stop"), stop_hook_active: false }, 0);
+    expect(first!.kind).toBe("task_done");
+    expect(first!.repeat).toBeUndefined();
   });
 });

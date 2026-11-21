@@ -44,7 +44,8 @@ The installed hooks point at this checkout's absolute path, and `hooks:uninstall
 - A session whose terminal was killed never sends SessionEnd, so its character would stay at its desk for 12 hours. Use **Dismiss session…** on the inspector's Now tab to end it as if it had closed.
 - Notices (needs you, finished, level up) show as toasts over the stage and in the ticker at the bottom; click a toast to select the character.
 - System notifications are off until you allow them: open Settings (⚙) and click "Enable notifications", then grant the browser's permission prompt. The "Notify when an agent needs you / finishes" toggles control them (and the matching toasts); "Chime" adds a sound.
-- Claude Code sends an `idle_prompt` notification about a minute after a session stops waiting; for a session that has finished or is idle it is only logged in the activity list, not shown as "needs you".
+- Claude Code sends an `idle_prompt` notification about a minute after a session starts waiting for your next prompt; for a session that has finished or is idle it is only logged in the activity list, not shown as "needs you". Permission and question prompts always show as "needs you".
+- If a Stop hook of yours blocks the agent from stopping, the task counts (XP, notice) once, at the first stop; the character goes back to "done" when the continuation ends.
 
 ## Seniority and effort
 

@@ -5,6 +5,8 @@ export type EventKind = "session_start" | "prompt" | "tool" | "needs_input" | "t
 export type AgentEvent = {
   source: string; sessionId: string; repoPath: string; at: number; kind: EventKind;
   model?: string; tier?: Tier; effort?: Effort; detail?: Record<string, string>;
+  inputKind?: "idle" | "blocking";   // needs_input: "idle" is a nudge after the agent stopped; unspecified means blocking
+  repeat?: true;                     // task_done: the end of a continuation a blocking Stop hook forced (no XP, no notice)
 };
 export type Look = { body: string; skin: string; hairStyle: number; hairColor: string; hat: string | null; accessory: string | null };
 export type Character = {

@@ -182,7 +182,7 @@ test("fix 1 (2b): a second prompt after the grace period binds; the first prompt
 test("fix 1 (3): before any prompt there is no grace expiry", () => {
   const w = newWorld();
   w.apply(bare("session_start", { at: 0 }));
-  w.apply(bare("needs_input", { at: 60_000 }));     // idle_prompt while still waiting for the first prompt
+  w.apply(bare("needs_input", { at: 60_000, inputKind: "idle" }));     // idle_prompt while still waiting for the first prompt
   expect(chars(w)).toEqual([]);
   expect(sess(w)[0]).toMatchObject({ tierKnown: false, graceSince: null, characterId: null, state: "idle" });
 });

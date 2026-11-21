@@ -195,7 +195,7 @@ test("needs_input after Stop (idle_prompt) is an activity line only: stays done,
   const notices = kindNotices(w.apply(ev("task_done", { at: 2000 })));
   w.ack("t:s1");
   const before = sess(w)[0]!;
-  const d = w.apply(ev("needs_input", { at: 62_000, detail: { reason: "Claude is waiting for your input" } }));
+  const d = w.apply(ev("needs_input", { at: 62_000, inputKind: "idle", detail: { reason: "Claude is waiting for your input" } }));
   notices.push(...kindNotices(d));
   expect(notices).toEqual(["done"]);
   const s = sess(w)[0]!;
@@ -204,9 +204,9 @@ test("needs_input after Stop (idle_prompt) is an activity line only: stays done,
   w.tick(2000 + CONFIG.doneToIdleMs); expect(sess(w)[0]!.state).toBe("idle");    // the done → idle rule still fires
 });
 
-test("needs_input while idle stays idle with no notice and no attention", () => {
+test("an idle-type needs_input while idle stays idle with no notice and no attention", () => {
   const w = newWorld(); w.apply(ev("session_start"));
-  const d = w.apply(ev("needs_input", { at: 5000 }));
+  const d = w.apply(ev("needs_input", { at: 5000, inputKind: "idle" }));
   expect(kindNotices(d)).toEqual([]);
   expect(sess(w)[0]).toMatchObject({ state: "idle", attention: false });
   expect(sess(w)[0]!.activity.at(-1)?.kind).toBe("needs_input");
@@ -240,4 +240,47 @@ test("ending an arriving session that earned XP binds it at the default tier and
   expect(chars(w)).toHaveLength(1);
   expect(chars(w)[0]).toMatchObject({ tier: CONFIG.defaultTier, xp: CONFIG.xp.prompt });
   expect(d.at(-1)).toEqual({ type: "session_removed", key: "t:s1" });
+});
+
+test("a blocking Stop hook: Stop, tool, repeat Stop, idle prompt → done, one done notice, task XP once", () => {
+  const w = newWorld(); w.apply(ev("session_start", { at: 0 })); w.apply(ev("prompt", { at: 100 }));
+  const all: Delta[] = [];
+  all.push(...w.apply(ev("task_done", { at: 1000 })));
+  const xpAfterFirst = chars(w)[0]!.xp;
+  w.ack("t:s1");
+  all.push(...w.apply(ev("tool", { at: 2000 })));
+  expect(sess(w)[0]!.state).toBe("working");
+  all.push(...w.apply(ev("task_done", { at: 3000, repeat: true, detail: { summary: "Now the tests pass." } })));
+  expect(sess(w)[0]).toMatchObject({ state: "done", stateSince: 3000, lastSummary: "Now the tests pass." });
+  all.push(...w.apply(ev("needs_input", { at: 63_000, inputKind: "idle" })));
+  expect(kindNotices(all)).toEqual(["done"]);
+  const c = chars(w)[0]!;
+  expect(c.xp).toBe(xpAfterFirst + CONFIG.xp.tool);            // the repeat Stop adds nothing
+  expect(xpAfterFirst).toBe(CONFIG.xp.prompt + CONFIG.xp.taskDone);
+  expect(c.stats.tasks).toBe(1);
+  expect(sess(w)[0]).toMatchObject({ state: "done", attention: false });
+});
+
+test("a repeat Stop leaves attention as it is", () => {
+  const w = newWorld(); w.apply(ev("session_start")); w.apply(ev("prompt", { at: 1100 }));
+  w.apply(ev("task_done", { at: 2000 }));                       // attention raised, not acked
+  w.apply(ev("task_done", { at: 3000, repeat: true }));
+  expect(sess(w)[0]!.attention).toBe(true);
+});
+
+test("a blocking needs_input while done asks for the user", () => {
+  const w = newWorld(); w.apply(ev("session_start")); w.apply(ev("prompt", { at: 1100 })); w.apply(ev("task_done", { at: 2000 }));
+  w.ack("t:s1");
+  const d = w.apply(ev("needs_input", { at: 2500, inputKind: "blocking" }));
+  expect(kindNotices(d)).toEqual(["needs_input"]);
+  expect(sess(w)[0]).toMatchObject({ state: "needs_input", attention: true });
+});
+
+test("a blocking (or unspecified) needs_input while idle asks for the user", () => {
+  for (const inputKind of ["blocking", undefined] as const) {
+    const w = newWorld(); w.apply(ev("session_start"));
+    const d = w.apply(ev("needs_input", { at: 5000, ...(inputKind && { inputKind }) }));
+    expect(kindNotices(d)).toEqual(["needs_input"]);
+    expect(sess(w)[0]).toMatchObject({ state: "needs_input", attention: true });
+  }
 });
