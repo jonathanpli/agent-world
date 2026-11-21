@@ -50,6 +50,14 @@ export function activeRepos(s: ClientState): Repo[] {
     .sort((a, b) => a.createdAt - b.createdAt || (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
 }
 
+/**
+ * The label for a session with no character: "Arriving" while it waits for its tier (it joins the roster once that is
+ * known), "Temp" for a contractor filling in because the roster is full.
+ */
+export function unboundLabel(s: Session): string {
+  return s.tierKnown ? "Temp" : "Arriving";
+}
+
 export function sessionOf(s: ClientState, characterId: string): Session | undefined {
   for (const x of s.sessions.values()) if (x.characterId === characterId) return x;
   return undefined;

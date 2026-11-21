@@ -1,7 +1,7 @@
 import { levelForXp } from "../../core/levels";
 import { CONFIG } from "../../shared/config";
 import type { CharState, Effort, Look, Tier } from "../../shared/types";
-import { activeRepos, type ClientState } from "../state";
+import { activeRepos, unboundLabel, type ClientState } from "../state";
 import { actorAt, safeLayout, sessionsByRepo, stepActors, syncActors, type Actor, type Layout } from "./actors";
 import { drawBubble, drawEdgeButtons, drawPlate, drawSelection, edgeButtons, layoutPlates, plateText } from "./overlay";
 import { createFader } from "./fade";
@@ -34,7 +34,7 @@ function resolve(state: ClientState): Map<string, Who> {
     if (look === null || look === undefined) continue;
     out.set(s.characterId ?? s.key, {
       look, tier: s.tier, state: s.state, effort: effortOf(s.effort), since: s.stateSince,
-      name: c?.name ?? "Temp", level: c === undefined ? null : levelForXp(c.xp), attention: s.attention,
+      name: c?.name ?? unboundLabel(s), level: c === undefined ? null : levelForXp(c.xp), attention: s.attention,
     });
   }
   for (const c of state.characters.values()) {

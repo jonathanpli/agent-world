@@ -66,7 +66,7 @@ async function openStream(base: string): Promise<() => Promise<{ event: string; 
 }
 
 test("hook payload in, delta out on the stream", async () => {
-  const { base } = await start();
+  const { base } = await start({ readModel: async () => "claude-sonnet-4-5" });
   const next = await openStream(base);
   const first = await next();
   expect(first.event).toBe("snapshot");
@@ -140,8 +140,41 @@ test("model fallback reaches a short session whose transcript appears after Sess
   expect((await snapshot(base)).sessions[0]).toMatchObject({ model: "claude-opus-5-5", tier: 3 });
 });
 
-test("PATCH character", async () => {
+test("a session waits for its model before joining the roster: one character for the real fixture replay", async () => {
+  let t = 1_000_000; let answer: string | null = null;
+  const { base } = await start({ now: () => t, readModel: async () => answer });
+  const next = await openStream(base);
+  await next();                                             // the snapshot
+  const deltas: Delta[] = [];
+  await ingest(base, fx("SessionStart")); deltas.push(...((await next()).data as Delta[]));
+  t += 1_300; await ingest(base, fx("UserPromptSubmit")); deltas.push(...((await next()).data as Delta[]));
+  let s = await snapshot(base);
+  expect(s.characters).toEqual([]);
+  expect(s.sessions[0]).toMatchObject({ characterId: null, tierKnown: false, pendingXp: CONFIG.xp.prompt });
+  t += 4_000; answer = "claude-opus-5-5";
+  await ingest(base, fx("PostToolUse")); deltas.push(...((await next()).data as Delta[]));
+  t += 2_000; await ingest(base, fx("Stop")); deltas.push(...((await next()).data as Delta[]));
+  s = await snapshot(base);
+  expect(s.characters).toHaveLength(1);
+  expect(s.characters[0]).toMatchObject({ tier: 3, xp: CONFIG.xp.prompt + CONFIG.xp.tool + CONFIG.xp.taskDone, stats: { tasks: 1, tools: 1 } });
+  expect(new Set(deltas.flatMap(d => (d.type === "character" ? [d.character.id] : []))).size).toBe(1);
+  expect(deltas.every(d => d.type !== "character" || d.character.tier === 3)).toBe(true);
+  expect(s.sessions[0]).toMatchObject({ characterId: s.characters[0]!.id, tier: 3, tierKnown: true, pendingXp: 0, state: "done" });
+});
+
+test("a session that never resolves its model joins at the default tier when it ends", async () => {
   const { base } = await start();
+  for (const name of ["SessionStart", "UserPromptSubmit", "PostToolUse", "Stop"]) await ingest(base, fx(name));
+  expect((await snapshot(base)).characters).toEqual([]);
+  await ingest(base, fx("SessionEnd"));
+  const s = await snapshot(base);
+  expect(s.sessions).toEqual([]);
+  expect(s.characters).toHaveLength(1);
+  expect(s.characters[0]).toMatchObject({ tier: CONFIG.defaultTier, xp: CONFIG.xp.prompt + CONFIG.xp.tool + CONFIG.xp.taskDone });
+});
+
+test("PATCH character", async () => {
+  const { base } = await start({ readModel: async () => "claude-sonnet-4-5" });
   await ingest(base, fx("SessionStart"));
   const id = (await snapshot(base)).characters[0]!.id;
   const ok = await send(base, "PATCH", `/api/characters/${id}`, { name: "Zed" });
@@ -254,7 +287,7 @@ test("a missing Host header is refused", async () => {
 });
 
 test("a foreign browser Origin is refused on writes, and its ingest is discarded", async () => {
-  const { base } = await start();
+  const { base } = await start({ readModel: async () => "claude-sonnet-4-5" });
   vi.spyOn(console, "warn").mockImplementation(() => {});
   const evil = { origin: "https://evil.example", "content-type": "application/json" };
   expect((await raw(base, "POST", "/ingest/claude-code", { origin: "https://evil.example" }, fx("SessionStart"))).status).toBe(204);

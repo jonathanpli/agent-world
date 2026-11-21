@@ -25,10 +25,10 @@ test("tool window is per session and restarts after the session is removed", () 
   const w = newWorld(); w.apply(ev("session_start", { at: 0 }));
   for (let i = 0; i < 40; i++) w.apply(ev("tool", { at: i * 100 }));
   expect(chars(w)[0].xp).toBe(60);
-  w.apply(ev("tool", { sessionId: "s2", at: 5000 }));          // other session has its own window
+  w.apply(ev("tool", { sessionId: "s2", at: 5000, tier: 2 }));          // other session has its own window
   expect(chars(w).reduce((n, c) => n + c.xp, 0)).toBe(62);
   w.apply(ev("session_end", { at: 5000 }));
-  w.apply(ev("tool", { at: 6000 }));                           // fresh window, not the old exhausted one
+  w.apply(ev("tool", { at: 6000, tier: 2 }));                           // fresh window, not the old exhausted one
   expect(chars(w).reduce((n, c) => n + c.xp, 0)).toBe(64);
 });
 
@@ -79,5 +79,5 @@ test("character delta is emitted once per event, after the notices' changes", ()
 
 test("snapshot stays exactly the shared shape", () => {
   const w = newWorld(); w.apply(ev("tool"));
-  expect(Object.keys(sess(w)[0]).sort()).toEqual(["activity", "attention", "characterId", "effort", "key", "lastEventAt", "lastSummary", "model", "repoId", "sessionId", "source", "startedAt", "state", "stateSince", "task", "tempLook", "tier"]);
+  expect(Object.keys(sess(w)[0]).sort()).toEqual(["activity", "attention", "characterId", "effort", "key", "lastEventAt", "lastSummary", "model", "pendingStats", "pendingXp", "repoId", "sessionId", "source", "startedAt", "state", "stateSince", "task", "tempLook", "tier", "tierKnown"]);
 });

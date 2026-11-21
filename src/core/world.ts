@@ -18,6 +18,8 @@ export type World = {
 };
 
 const TEMP_NAME = "Temp";
+/** How notices name a session that is still waiting for its tier (and so has no character yet). */
+export const ARRIVAL_NAME = "A new arrival";
 const clone = <T>(x: T): T => structuredClone(x);
 
 export function createWorld(init: WorldInit, deps: WorldDeps): World {
@@ -73,16 +75,40 @@ export function createWorld(init: WorldInit, deps: WorldDeps): World {
     }
   }
 
+  /** A session whose first event has no tier is not bound yet: it arrives with a temp look and holds its XP. */
   function createSession(ev: AgentEvent, key: string, repo: Repo, out: Delta[]): Session {
     const session: Session = {
       key, source: ev.source, sessionId: ev.sessionId, characterId: null, tempLook: null,
-      repoId: repo.id, state: "idle", stateSince: ev.at, model: ev.model ?? null, tier: ev.tier ?? 2,
-      effort: ev.effort ?? null, startedAt: ev.at, lastEventAt: ev.at, task: null, lastSummary: null,
-      attention: false, activity: [],
+      repoId: repo.id, state: "idle", stateSince: ev.at, model: ev.model ?? null, tier: ev.tier ?? CONFIG.defaultTier,
+      effort: ev.effort ?? null, tierKnown: ev.tier !== undefined, pendingXp: 0, pendingStats: { tasks: 0, tools: 0 },
+      startedAt: ev.at, lastEventAt: ev.at, task: null, lastSummary: null, attention: false, activity: [],
     };
     sessions.set(key, session);
-    assign(session, ev.at, out);
+    if (session.tierKnown) assign(session, ev.at, out);
+    else session.tempLook = randomLook(deps.rng);
     return session;
+  }
+
+  /** Ends the wait for a tier: binds the session at `tier`. The held XP is credited by the next `settle`, or dropped for a temp. */
+  function bindArrival(s: Session, tier: Tier, at: number, out: Delta[]): void {
+    s.tierKnown = true;
+    s.tier = tier;
+    assign(s, at, out);
+    if (s.characterId === null) { s.pendingXp = 0; s.pendingStats = { tasks: 0, tools: 0 }; }
+  }
+
+  /**
+   * Ends a session (SessionEnd or stale). One still waiting for its tier is bound at the default tier and credited
+   * first, so nothing it earned is lost.
+   */
+  function endSession(s: Session, at: number, out: Delta[]): void {
+    if (!s.tierKnown) {
+      bindArrival(s, s.tier, at, out);
+      const c = s.characterId === null ? undefined : characters.get(s.characterId);
+      out.push(...settle(s, at, false));
+      if (c !== undefined) out.push(characterDelta(c));
+    }
+    out.push(removeSession(s.key));
   }
 
   function setState(s: Session, state: Session["state"], at: number): void {
@@ -95,7 +121,7 @@ export function createWorld(init: WorldInit, deps: WorldDeps): World {
     if (last !== undefined && at - last < CONFIG.noticeThrottleMs) return [];
     lastNoticeAt.set(throttleKey, at);
     const c = s.characterId === null ? undefined : characters.get(s.characterId);
-    const name = c?.name ?? TEMP_NAME;
+    const name = c?.name ?? (s.tierKnown ? TEMP_NAME : ARRIVAL_NAME);
     const text = kind === "needs_input" ? `${name} needs you in ${repo.name}` : `${name} finished a task in ${repo.name}`;
     const n: Notice = { id: deps.newId(), at, kind, sessionKey: s.key, characterId: c?.id ?? null, characterName: name, repoName: repo.name, text };
     return [{ type: "notice", notice: n }];
@@ -109,35 +135,53 @@ export function createWorld(init: WorldInit, deps: WorldDeps): World {
     return { type: "session_removed", key };
   }
 
-  /** Grants XP, level-ups and achievements to the session's character. Returns notices only; apply emits the character delta. */
+  /**
+   * Adds what `ev` earns to the session's held XP and stats, then settles them. A session still waiting for its tier
+   * holds what it earns; a temp earns nothing. Returns notices only; apply emits the character delta.
+   */
   function award(session: Session, ev: AgentEvent): Delta[] {
-    const c = session.characterId === null ? undefined : characters.get(session.characterId);
-    if (c === undefined) return [];
-    let gain = 0;
+    if (session.tierKnown && session.characterId === null) return [];
     if (ev.kind === "tool") {
-      c.stats.tools++;
+      session.pendingStats.tools++;
       let w = toolWindow.get(session.key);
       if (w === undefined || ev.at - w.start >= CONFIG.toolWindowMs) { w = { start: ev.at, earned: 0 }; toolWindow.set(session.key, w); }
-      gain = Math.min(CONFIG.xp.tool, CONFIG.xp.toolCapPerMinute - w.earned);
+      const gain = Math.min(CONFIG.xp.tool, CONFIG.xp.toolCapPerMinute - w.earned);
       w.earned += gain;
-    } else if (ev.kind === "prompt") gain = CONFIG.xp.prompt;
-    else if (ev.kind === "task_done") { gain = CONFIG.xp.taskDone; c.stats.tasks++; }
-    else return [];
+      session.pendingXp += gain;
+    } else if (ev.kind === "prompt") session.pendingXp += CONFIG.xp.prompt;
+    else if (ev.kind === "task_done") { session.pendingXp += CONFIG.xp.taskDone; session.pendingStats.tasks++; }
+    return settle(session, ev.at, ev.kind === "task_done");
+  }
+
+  /**
+   * Credits the session's held XP and stats to its character with level-ups and achievements, through the one path
+   * every award takes. Held while the tier is unknown; dropped for a temp. Returns notices only.
+   */
+  function settle(session: Session, at: number, finishedTask: boolean): Delta[] {
+    if (!session.tierKnown) return [];
+    const gain = session.pendingXp, stats = session.pendingStats;
+    if (gain === 0 && stats.tasks === 0 && stats.tools === 0) return [];
+    session.pendingXp = 0;
+    session.pendingStats = { tasks: 0, tools: 0 };
+    const c = session.characterId === null ? undefined : characters.get(session.characterId);
+    if (c === undefined) return [];
+    c.stats.tools += stats.tools;
+    c.stats.tasks += stats.tasks;
 
     const levelBefore = levelForXp(c.xp);
     c.xp += gain;
     c.repoXp[session.repoId] = (c.repoXp[session.repoId] ?? 0) + gain;
-    c.lastActiveAt = ev.at;
+    c.lastActiveAt = at;
 
     const repoName = repos.get(session.repoId)?.name ?? null;
     const out: Delta[] = [];
     const push = (kind: "level_up" | "achievement", text: string): void => {
-      out.push({ type: "notice", notice: { id: deps.newId(), at: ev.at, kind, sessionKey: session.key, characterId: c.id, characterName: c.name, repoName, text } });
+      out.push({ type: "notice", notice: { id: deps.newId(), at, kind, sessionKey: session.key, characterId: c.id, characterName: c.name, repoName, text } });
     };
     const levelAfter = levelForXp(c.xp);
     if (levelAfter > levelBefore) push("level_up", `${c.name} reached level ${levelAfter}`);
-    for (const id of earned(c, { at: ev.at, session, levelBefore, finishedTask: ev.kind === "task_done" })) {
-      c.achievements[id] = ev.at;
+    for (const id of earned(c, { at, session, levelBefore, finishedTask })) {
+      c.achievements[id] = at;
       push("achievement", `${c.name} earned ${ACHIEVEMENTS.find(a => a.id === id)!.title}`);
     }
     return out;
@@ -146,7 +190,13 @@ export function createWorld(init: WorldInit, deps: WorldDeps): World {
   function apply(ev: AgentEvent): Delta[] {
     const key = `${ev.source}:${ev.sessionId}`;
     let s = sessions.get(key);
-    if (ev.kind === "session_end") return s === undefined ? [] : [removeSession(key)];
+    if (ev.kind === "session_end") {
+      if (s === undefined) return [];
+      const out: Delta[] = [];
+      if (!s.tierKnown && ev.tier !== undefined) s.tier = ev.tier;
+      endSession(s, ev.at, out);
+      return out;
+    }
 
     const out: Delta[] = [];
     const repo = repoFor(ev.repoPath, ev.at, out);
@@ -157,7 +207,9 @@ export function createWorld(init: WorldInit, deps: WorldDeps): World {
     if (ev.effort !== undefined) s.effort = ev.effort;
     if (ev.model !== undefined) s.model = ev.model;
     const tier: Tier = ev.tier ?? s.tier;
-    if (tier !== s.tier) {
+    if (!s.tierKnown) {
+      if (ev.tier !== undefined || ev.at - s.startedAt > CONFIG.modelGraceMs) bindArrival(s, tier, ev.at, out);
+    } else if (tier !== s.tier) {
       s.tier = tier;
       s.characterId = null;          // release before assigning, so the old character is free again
       assign(s, ev.at, out);
@@ -183,11 +235,9 @@ export function createWorld(init: WorldInit, deps: WorldDeps): World {
     }
 
     const c = s.characterId === null ? undefined : characters.get(s.characterId);
-    if (c !== undefined) {
-      c.lastActiveAt = ev.at;
-      out.push(...award(s, ev));
-      out.push(characterDelta(c));
-    }
+    if (c !== undefined) c.lastActiveAt = ev.at;
+    out.push(...award(s, ev));
+    if (c !== undefined) out.push(characterDelta(c));
     out.push(sessionDelta(s), ...notices);
     return out;
   }
@@ -195,7 +245,7 @@ export function createWorld(init: WorldInit, deps: WorldDeps): World {
   function tick(now: number): Delta[] {
     const out: Delta[] = [];
     for (const s of [...sessions.values()]) {
-      if (now - s.lastEventAt >= CONFIG.sessionStaleMs) out.push(removeSession(s.key));
+      if (now - s.lastEventAt >= CONFIG.sessionStaleMs) endSession(s, now, out);
       else if (s.state === "done" && now - s.stateSince >= CONFIG.doneToIdleMs) {
         setState(s, "idle", s.stateSince + CONFIG.doneToIdleMs);
         out.push(sessionDelta(s));

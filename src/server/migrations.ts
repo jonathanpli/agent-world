@@ -25,4 +25,10 @@ export const MIGRATIONS: string[] = [
   CREATE INDEX events_at ON events (at);
   CREATE TABLE settings (key TEXT PRIMARY KEY, value TEXT NOT NULL);
   `,
+  // Sessions that wait for their tier before joining the roster hold their XP until then. Older rows were all bound.
+  `
+  ALTER TABLE sessions ADD COLUMN tier_known INTEGER NOT NULL DEFAULT 1;
+  ALTER TABLE sessions ADD COLUMN pending_xp INTEGER NOT NULL DEFAULT 0;
+  ALTER TABLE sessions ADD COLUMN pending_stats TEXT NOT NULL DEFAULT '{"tasks":0,"tools":0}';
+  `,
 ];

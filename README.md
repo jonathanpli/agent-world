@@ -44,6 +44,8 @@ Model decides a character's tier (its seniority), set from the model id:
 | 3 | `opus` | Senior | Commander | Technical diver |
 | 4 | `fable`, `mythos` | Principal | Admiral | Master diver |
 
+Claude Code does not report the model when a session starts, so Agent World reads it from the session transcript a moment later. Until then the session shows as "Arriving" and holds the XP it earns; it joins the roster at its tier once the model is known (tier 2 if it is still unknown after 15 seconds, or when the session ends), and the held XP is credited then.
+
 Tier shows in the costume, the work spot, the name plate and the roster. It does not change XP; level is separate. The reported effort (`low`, `medium`, `high`, `xhigh`, `max`) shows as how intensely a working character animates.
 
 Three themes ship: office, space and underwater. Switch in the settings panel; the choice is saved.

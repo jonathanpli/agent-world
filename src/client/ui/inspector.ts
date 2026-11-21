@@ -5,7 +5,7 @@ import { ACCESSORIES, BODY_COLORS, HAIR_COLORS, HAIR_STYLES, HATS, SKIN_TONES, u
 import type { Character, Look, Session, Tier } from "../../shared/types";
 import { safeDraw, THEMES, type Theme } from "../engine/theme";
 import { api } from "../net";
-import { sessionOf, type ClientState } from "../state";
+import { sessionOf, unboundLabel, type ClientState } from "../state";
 import { attempt, el, STATE_TEXT } from "./dom";
 
 /** "45s", "12m", "3h 05m". Negative spans count as zero. */
@@ -135,7 +135,7 @@ export function mount(root: HTMLElement, deps: InspectorDeps): { render(explicit
 
   function renderHead(c: Character | undefined, s: Session | undefined): void {
     if (!renaming) {
-      if (c === undefined) nameBox.replaceChildren(el("span", { class: "name" }, "Temp"));
+      if (c === undefined) nameBox.replaceChildren(el("span", { class: "name" }, unboundLabel(s!)));
       else {
         const b = el("button", { type: "button", class: "name", title: "Click to rename" }, c.name);
         b.addEventListener("click", () => startRename(c));
@@ -147,7 +147,7 @@ export function mount(root: HTMLElement, deps: InspectorDeps): { render(explicit
       el("span", { class: "tier" }, deps.tierTitle(tier)),
       el("span", { class: "model", title: "Model" }, s?.model ?? "model unknown"));
     if (c === undefined) {
-      xpLine.replaceChildren(el("span", { class: "dim" }, "Contractor: earns no XP"));
+      xpLine.replaceChildren(el("span", { class: "dim" }, s!.tierKnown ? "Contractor: earns no XP" : "Arriving: XP is held until the model is known"));
       xpBar.hidden = true;
       return;
     }

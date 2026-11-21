@@ -1,6 +1,6 @@
 import { levelForXp } from "../../core/levels";
 import type { CharState, Tier } from "../../shared/types";
-import type { ClientState } from "../state";
+import { unboundLabel, type ClientState } from "../state";
 import { el, STATE_ICON, STATE_TEXT } from "./dom";
 
 export type RosterRow = { id: string; name: string; tier: Tier; level: number | null; state: CharState; attention: boolean; temp: boolean };
@@ -8,7 +8,7 @@ export type RosterRow = { id: string; name: string; tier: Tier; level: number | 
 const rank = (r: RosterRow): number => (r.attention ? 0 : r.state !== "off_duty" ? 1 : 2);
 
 /**
- * One row per non-retired character, plus one per temp session; ids are actor ids (character id, or session key for
+ * One row per non-retired character, plus one per unbound session (a temp, or an arrival waiting for its tier); ids are actor ids (character id, or session key for
  * a temp). Sorted attention first, then live, then off duty; within a group characters come before temps, then by name.
  */
 export function rosterRows(s: ClientState): RosterRow[] {
@@ -16,7 +16,7 @@ export function rosterRows(s: ClientState): RosterRow[] {
   const live = new Map<string, { state: CharState; attention: boolean; tier: Tier }>();
   for (const x of s.sessions.values()) {
     if (x.characterId !== null) { live.set(x.characterId, x); continue; }
-    rows.push({ id: x.key, name: "Temp", tier: x.tier, level: null, state: x.state, attention: x.attention, temp: true });
+    rows.push({ id: x.key, name: unboundLabel(x), tier: x.tier, level: null, state: x.state, attention: x.attention, temp: true });
   }
   for (const c of s.characters.values()) {
     if (c.retired) continue;

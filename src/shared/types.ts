@@ -21,6 +21,8 @@ export type Session = {
   tempLook: Look | null;             // set only for temps
   repoId: string; state: Exclude<CharState, "off_duty">; stateSince: number;
   model: string | null; tier: Tier; effort: Effort | null;
+  tierKnown: boolean;                // false until an event carries a tier or the grace period ends; unbound until then
+  pendingXp: number; pendingStats: { tasks: number; tools: number };   // earned while the tier is unknown, credited on binding
   startedAt: number; lastEventAt: number; task: string | null; lastSummary: string | null;
   attention: boolean; activity: ActivityLine[];
 };

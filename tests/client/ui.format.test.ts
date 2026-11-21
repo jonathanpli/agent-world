@@ -2,7 +2,8 @@ import { expect, test } from "vitest";
 import { ackEpisode, formatDuration, lockLevel, renameTo, shouldAck, xpProgress } from "../../src/client/ui/inspector";
 import { rosterKey, rosterRows } from "../../src/client/ui/roster";
 import { tickerItems } from "../../src/client/ui/ticker";
-import { applySnapshot, emptyState } from "../../src/client/state";
+import { applySnapshot, emptyState, unboundLabel } from "../../src/client/state";
+import { plateText } from "../../src/client/engine/overlay";
 import { HATS, unlocked } from "../../src/shared/cosmetics";
 import { CONFIG } from "../../src/shared/config";
 import { char, notice, repo, session, snap } from "../helpers/clientFixtures";
@@ -88,4 +89,17 @@ test("renameTo: the trimmed name to send, or null to cancel (empty or unchanged)
   expect(renameTo("   ", "Bo")).toBeNull();
   expect(renameTo("", "Bo")).toBeNull();
   expect(renameTo(" Bo ", "Bo")).toBeNull();
+});
+
+test("roster and plate labels: an unknown-tier session is Arriving, a real temp is Temp", () => {
+  const arriving = session("a1", null, "r", { tierKnown: false });
+  const temp = session("t1", null, "r");
+  expect(unboundLabel(arriving)).toBe("Arriving");
+  expect(unboundLabel(temp)).toBe("Temp");
+  const s = emptyState();
+  applySnapshot(s, snap({ repos: [repo("r")], sessions: [arriving, temp] }));
+  const rows = rosterRows(s);
+  expect(rows.find(r => r.id === "a1")).toMatchObject({ name: "Arriving", level: null, temp: true });
+  expect(rows.find(r => r.id === "t1")).toMatchObject({ name: "Temp", level: null, temp: true });
+  expect(plateText(unboundLabel(arriving), null, "Engineer", false)).toEqual({ name: "Arriving", rest: "" });
 });

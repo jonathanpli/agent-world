@@ -23,6 +23,8 @@ export const CONFIG = {
   ingestBodyMax: 5_000_000,
   tickMs: 5_000,
   modelRetryMs: 2_000,
+  modelGraceMs: 15_000,                           // a session with no tier by then joins at defaultTier
+  defaultTier: 2,
   transcriptTailBytes: 262_144,
   gitTimeoutMs: 1_000,
   repoResolveTimeoutMs: 2_500,

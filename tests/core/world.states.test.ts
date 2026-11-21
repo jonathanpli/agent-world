@@ -102,7 +102,7 @@ test("notices are throttled per session and kind", () => {
 
 test("notice text names the character and repo", () => {
   const w = newWorld();
-  const d = w.apply(ev("needs_input", { at: 0 }));
+  const d = w.apply(ev("needs_input", { at: 0, tier: 2 }));
   const name = chars(w)[0].name;
   expect(d).toContainEqual({ type: "notice", notice: expect.objectContaining({ kind: "needs_input", sessionKey: "t:s1", characterName: name, repoName: "a", text: `${name} needs you in a` }) });
   const done = w.apply(ev("task_done", { at: 0 }));
