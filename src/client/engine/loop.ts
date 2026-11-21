@@ -1,15 +1,17 @@
 import { levelForXp } from "../../core/levels";
 import { CONFIG } from "../../shared/config";
+import { mulberry32 } from "../../shared/rng";
 import type { CharState, Effort, Look, Session, Tier } from "../../shared/types";
 import { activeRepos, unboundLabel, type ClientState } from "../state";
 import { contextUsePct, extrasFor, gaugeStep, nextAction, nextCompaction, type ActiveAction, type CompactionWatch, type Extras } from "./actions";
 import { actorAt, safeLayout, sessionsByActor, sessionsByRepo, stepActors, syncActors, type Actor, type Layout } from "./actors";
 import { drawAction, drawCompaction, drawGauge, drawSidekicks } from "./extras";
-import { drawBubble, drawEdgeButtons, drawPlate, drawSelection, edgeButtons, layoutPlates, plateText } from "./overlay";
+import { drawBubble, drawChatBubble, drawEdgeButtons, drawPlate, drawSelection, edgeButtons, layoutPlates, plateText } from "./overlay";
 import { createFader } from "./fade";
 import { drawParticles, stepParticles } from "./particles";
 import { rect } from "./pixels";
 import { createSelection } from "./selection";
+import { CHAT_ICONS, createSocial, eligibleForChat, socialSpotsOf, speaker, type Chat } from "./social";
 import { getTheme, safeDraw, THEMES, VIEW, type Particle, type Point, type Rect, type Theme } from "./theme";
 
 export type Engine = {
@@ -18,6 +20,8 @@ export type Engine = {
   /** Switches theme with a short fade to black and back; `instant` skips the fade (the first theme the server sends). */
   setTheme(id: string, opts?: { instant?: boolean }): void;
   burst(kind: "celebrate" | "levelUp", actorId: string): void;
+  /** Others at work in the same repo place as `actorId` react to it finishing or levelling up: a cheer, or a glance if working. */
+  react(actorId: string): void;
   /** Where an actor stands across its screen, 0 (left edge) to 1 (right edge); null if it has no actor. */
   screenX(actorId: string): number | null;
 };
@@ -62,6 +66,9 @@ export function startEngine(canvas: HTMLCanvasElement, state: ClientState): Engi
   const anim = new Map<string, { state: CharState; since: number; frame: number }>();
   const actions = new Map<string, ActiveAction>();          // by actor id: the tool action playing
   const compactions = new Map<string, CompactionWatch>();   // by actor id: compactions seen, and the moment playing
+  let social = createSocial();                              // idle chats and reactions; reset on a theme swap
+  const socialRng = mulberry32(0x50c1a1);                   // seeded, so chats are reproducible
+  const glances = new Map<string, { toward: string; at: number }>();   // by reacting actor id: whom it reacts to, and when
   let particles: Particle[] = [];
   let hovered: string | null = null;
   let screen = 0;
@@ -129,22 +136,50 @@ export function startEngine(canvas: HTMLCanvasElement, state: ClientState): Engi
     const t = now;
     const wall = Date.now();
     const fade = fader.step(now * 1000);
-    if (fade.swap !== null) theme = getTheme(fade.swap);       // at the midpoint, under full black
+    if (fade.swap !== null) { theme = getTheme(fade.swap); social = createSocial(); }   // at the midpoint, under full black
 
     const laid = safeLayout(theme, fallback, activeRepos(state));
     layout = laid.layout;
     const active = laid.theme;           // the theme whose layout and lounge are in use
     page(screen);
     syncActors(actors, state, active, layout, t, Math.random);
+    const workSpots = new Map<string, Point>();            // session-bound actors' work spots, before a chat moves them
+    for (const id of sessionsByActor(state).keys()) {
+      const a = actors.get(id);
+      if (a !== undefined) workSpots.set(id, { x: Math.round(a.target.x), y: Math.round(a.target.y) });
+    }
+    const who = resolve(state);
+    selection.afterSync();
+    const selected = selection.selected();
+
+    // idle characters chat in the lounge (on screen 0, so only those working there join in); one that stops being
+    // eligible breaks off this frame, its partner with it, and (no longer overridden) heads back to its spot
+    const nearLounge = (id: string): boolean => (workSpots.get(id)?.x ?? 0) < VIEW.w;
+    const eligible = [...who]
+      .filter(([id, w]) => actors.has(id) && nearLounge(id) && eligibleForChat(w.state, w.attention, id === selected))
+      .map(([id]) => id);
+    social.step(t, eligible, socialRng, socialSpotsOf(active));
+    for (const c of social.chats()) for (const id of [c.a, c.b]) {
+      const a = actors.get(id), to = social.targetFor(id);
+      if (a !== undefined && to !== null) a.target = to;
+    }
+    for (const [id] of glances) if (!social.reacting(id, t)) glances.delete(id);
+
     if (fade.swap !== null) {
       // everyone appears at their place in the new world, and the camera with them
       for (const a of actors.values()) { a.pos = { ...a.target }; a.moving = false; }
       camX = screen * VIEW.w;
     }
     stepActors(actors, dt, active.movement, t);
-    const who = resolve(state);
-    selection.afterSync();
-    const selected = selection.selected();
+    const standing = (a: Actor): boolean => !a.moving && a.pos.x === a.target.x && a.pos.y === a.target.y;
+    const talking: Chat[] = [];                             // chats whose pair has arrived: they face each other and talk
+    for (const c of social.chats()) {
+      const pa = actors.get(c.a), pb = actors.get(c.b);
+      if (pa === undefined || pb === undefined || !standing(pa) || !standing(pb)) continue;
+      pa.facing = pb.pos.x >= pa.pos.x ? 1 : -1;
+      pb.facing = pa.facing === 1 ? -1 : 1;
+      talking.push(c);
+    }
 
     // animation frames count from when the state began
     for (const [id, w] of who) {
@@ -160,9 +195,8 @@ export function startEngine(canvas: HTMLCanvasElement, state: ClientState): Engi
     // to draw (nothing until it has arrived at the spot)
     const bound = new Map<string, { spot: Point; session: Session; extras: Extras }>();
     for (const [id, session] of sessionsByActor(state)) {
-      const a = actors.get(id);
-      if (a === undefined || !who.has(id)) continue;
-      const spot = { x: Math.round(a.target.x), y: Math.round(a.target.y) };
+      const a = actors.get(id), spot = workSpots.get(id);
+      if (a === undefined || spot === undefined || !who.has(id)) continue;
       const act = nextAction(actions.get(id) ?? null, session.lastTool, wall);
       if (act === null) actions.delete(id); else actions.set(id, act);
       if (session.context !== null) compactions.set(id, nextCompaction(compactions.get(id), session.context.compactions, wall));
@@ -217,8 +251,17 @@ export function startEngine(canvas: HTMLCanvasElement, state: ClientState): Engi
         if (w === undefined) continue;
         const phase = (a.id.length * 0.7) % (Math.PI * 2);
         const at = { x: Math.round(a.pos.x), y: Math.round(a.pos.y + Math.sin(t * Math.PI * 2 * bob.hz + phase) * bob.px) };
-        const f = Math.floor(anim.get(a.id)?.frame ?? 0);
-        draw(th => th.drawCharacter(ctx, at, w.look, w.tier, w.state, w.effort, f, a.facing, a.moving));
+        // a reaction: a working actor glances toward the one it reacts to; anyone else standing still cheers
+        let pose = w.state, f = Math.floor(anim.get(a.id)?.frame ?? 0), facing = a.facing;
+        const glance = glances.get(a.id);
+        if (glance !== undefined && w.state === "working") {
+          const to = actors.get(glance.toward);
+          if (to !== undefined && to.pos.x !== a.pos.x) facing = to.pos.x > a.pos.x ? 1 : -1;
+        } else if (glance !== undefined && !a.moving) {
+          pose = "done";
+          f = Math.floor(Math.max(0, t - glance.at) * CONFIG.client.animFps);
+        }
+        draw(th => th.drawCharacter(ctx, at, w.look, w.tier, pose, w.effort, f, facing, a.moving));
         drawn.push({ id: a.id, at, w });
         const b = bound.get(a.id);
         if (b !== undefined && b.extras.sidekicks) drawSidekicks(ctx, theme, fallback, b.spot, b.session.sidekicks, b.extras.busySidekick, wall, t);
@@ -242,6 +285,11 @@ export function startEngine(canvas: HTMLCanvasElement, state: ClientState): Engi
       const compact = drawn.filter(d => !focus(d.id)).map(d => ({ at: d.at, text: plateText(d.w.name, d.w.level, title(d.w.titleTier), false) }));
       layoutPlates(compact, fullRects).forEach((r, i) => drawPlate(ctx, r, compact[i]!.text));
       for (const d of drawn) if (d.w.attention) drawBubble(ctx, d.at, d.w.state === "needs_input" ? "alert" : "done", t);
+      for (const c of talking) {
+        const { id, icon } = speaker(c, t);
+        const d = drawn.find(x => x.id === id);
+        if (d !== undefined) drawChatBubble(ctx, d.at, CHAT_ICONS[icon] ?? CHAT_ICONS[0]!);
+      }
       const sel = drawn.find(d => d.id === selected);
       if (sel !== undefined) drawSelection(ctx, sel.at, t, sel.w.attention ? 14 : 0);
       fullRects.forEach((r, i) => drawPlate(ctx, r, full[i]!.text, true));
@@ -269,6 +317,16 @@ export function startEngine(canvas: HTMLCanvasElement, state: ClientState): Engi
       const a = actors.get(actorId);
       if (a === undefined) return;
       draw(th => { particles.push(...th.effects[kind]({ ...a.pos }, Math.random)); });
+    },
+    react: actorId => {
+      const finisher = sessionsByActor(state).get(actorId);
+      if (finisher === undefined) return;
+      const at = performance.now() / 1000;
+      const peers = [...sessionsByActor(state)]
+        .filter(([id, s]) => id !== actorId && s.repoId === finisher.repoId && actors.has(id) && social.targetFor(id) === null)
+        .map(([id]) => id);
+      for (const id of peers) glances.set(id, { toward: actorId, at });
+      social.react(peers, at);
     },
     screenX: actorId => {
       const a = actors.get(actorId);

@@ -82,6 +82,15 @@ export function drawBubble(ctx: Ctx, at: Point, kind: "alert" | "done", t: numbe
   }
 }
 
+/** A small chat bubble over the head holding a 5x5 pixel icon (rows of "#" for ink), its tail toward the speaker. */
+export function drawChatBubble(ctx: Ctx, at: Point, icon: readonly string[]): void {
+  const x = Math.round(at.x) - 4, y = Math.round(at.y) - SPRITE.h - 11;
+  rect(ctx, x, y - 1, 9, 9, UI.ink); rect(ctx, x - 1, y, 11, 7, UI.ink);
+  rect(ctx, x, y, 9, 7, UI.bubble);
+  rect(ctx, x + 3, y + 8, 2, 1, UI.ink); rect(ctx, x + 3, y + 7, 1, 1, UI.bubble); rect(ctx, x + 2, y + 9, 1, 1, UI.ink);
+  icon.forEach((row, r) => { for (let c = 0; c < row.length; c++) if (row[c] === "#") rect(ctx, x + 2 + c, y + 1 + r, 1, 1, UI.ink); });
+}
+
 /** A pulsing ellipse round the feet (its back hidden behind the legs) and a marker `lift` px above the usual spot over the head. */
 export function drawSelection(ctx: Ctx, at: Point, t: number, lift: number): void {
   const grow = Math.round((Math.sin(t * 6) + 1) / 2);

@@ -104,6 +104,7 @@ connect({
       deliver(n, state.settings, show);
       toasts.show(n, state.settings, show);
       if (n.kind === "level_up" && n.characterId !== null) engine.burst("levelUp", n.characterId);
+      if ((n.kind === "done" || n.kind === "level_up") && actorId !== null) engine.react(actorId);
     }
     sync();
   },
