@@ -92,3 +92,7 @@ npm test
 npm run typecheck
 npm run build
 ```
+
+## Licence
+
+MIT — see [LICENSE](LICENSE).
