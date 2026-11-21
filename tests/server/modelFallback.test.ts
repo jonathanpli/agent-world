@@ -58,3 +58,11 @@ test("a directory or a FIFO → null promptly", async () => {
     expect(Date.now() - t0).toBeLessThan(500);
   }
 });
+
+test("sidechain (subagent) entries are skipped", async () => {
+  const p = file("t.jsonl",
+    line({ type: "assistant", isSidechain: true, message: { model: "claude-haiku-5-5" } }) +
+    line({ type: "assistant", isSidechain: false, message: { model: "claude-opus-5-5" } }) +
+    line({ type: "assistant", isSidechain: true, message: { model: "claude-haiku-5-5" } }));
+  expect(await modelFromTranscript(p)).toBe("claude-opus-5-5");
+});

@@ -5,6 +5,14 @@ import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { CONFIG } from "../shared/config";
 import { serverEnv } from "./env";
+import { nodeVersionProblem } from "./nodeVersion";
+
+// None of the static imports above need Node 22; node:sqlite is only loaded by the dynamic imports below, after this.
+const versionProblem = nodeVersionProblem(process.version);
+if (versionProblem !== null) {
+  console.error(versionProblem);
+  process.exit(1);
+}
 
 // node:sqlite prints an ExperimentalWarning when first loaded. Wrap Node's own warning listeners so they skip only that
 // warning (keeping --no-warnings and --trace-warnings behaviour), before the store is loaded (hence the dynamic imports

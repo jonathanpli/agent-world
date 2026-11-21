@@ -1,4 +1,4 @@
-import { mkdirSync } from "node:fs";
+import { chmodSync, closeSync, mkdirSync, openSync } from "node:fs";
 import { dirname } from "node:path";
 import { DatabaseSync, type SQLInputValue } from "node:sqlite";
 import { CONFIG } from "../shared/config";
@@ -33,7 +33,12 @@ function migrate(db: DatabaseSync): void {
 }
 
 export function openStore(path: string): Store {
-  if (path !== ":memory:") mkdirSync(dirname(path), { recursive: true });
+  if (path !== ":memory:") {
+    // the database holds prompt text: a directory this process creates is private, and so is a new database file
+    const created = mkdirSync(dirname(path), { recursive: true, mode: 0o700 });
+    if (created !== undefined) chmodSync(dirname(path), 0o700);     // the umask filters mkdir's mode; make it exact
+    closeSync(openSync(path, "a", 0o600));                           // creates the file 0600 when missing; keeps an existing one
+  }
   const db = new DatabaseSync(path);
   migrate(db);
 

@@ -1,7 +1,7 @@
 import { open, stat } from "node:fs/promises";
 import { CONFIG } from "../shared/config";
 
-/** Reads the tail of a Claude Code transcript and returns the most recent real assistant `message.model`. Never rejects. */
+/** Reads the tail of a Claude Code transcript and returns the most recent real main-thread assistant `message.model`. Never rejects. */
 export async function modelFromTranscript(path: string): Promise<string | null> {
   try {
     if (!(await stat(path)).isFile()) return null;   // a directory or FIFO would fail or block forever
@@ -21,7 +21,8 @@ export async function modelFromTranscript(path: string): Promise<string | null> 
       let entry: unknown;
       try { entry = JSON.parse(lines[i]!); } catch { continue; }
       if (typeof entry !== "object" || entry === null) continue;
-      const { type, message } = entry as { type?: unknown; message?: { model?: unknown } };
+      const { type, message, isSidechain } = entry as { type?: unknown; message?: { model?: unknown }; isSidechain?: unknown };
+      if (isSidechain === true) continue;              // a subagent's reply, possibly on another model
       const model = message?.model;
       // Placeholders such as "<synthetic>" are not real model ids: skip them and keep scanning.
       if (type === "assistant" && typeof model === "string" && model !== "" && !model.startsWith("<")) return model;

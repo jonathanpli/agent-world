@@ -1,4 +1,7 @@
 import { spawn, spawnSync } from "node:child_process";
+import { mkdtempSync, statSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { createServer, type Server } from "node:http";
 import type { AddressInfo } from "node:net";
 import { afterEach, expect, test } from "vitest";
@@ -61,4 +64,20 @@ test("ignores proxy environment variables: payload goes to the target, nothing t
   } finally {
     await new Promise<void>(r => { proxy.close(() => r()); proxy.closeAllConnections(); });
   }
+});
+
+test("ignores ~/.curlrc and stays executable", async () => {
+  expect(statSync("hooks/forward.sh").mode & 0o111).toBe(0o111);
+  const headers: Record<string, string | string[] | undefined>[] = [];
+  server = createServer((req, res) => { headers.push(req.headers); req.resume(); req.on("end", () => res.end("ok")); });
+  await new Promise<void>(r => server!.listen(0, "127.0.0.1", r));
+  const port = (server.address() as AddressInfo).port;
+  const home = mkdtempSync(join(tmpdir(), "aw-curlrc-"));
+  writeFileSync(join(home, ".curlrc"), 'header = "X-From-Curlrc: yes"\n');
+  const child = spawn("sh", ["hooks/forward.sh"], { env: { ...process.env, HOME: home, AGENT_WORLD_PORT: String(port) }, stdio: ["pipe", "ignore", "ignore"] });
+  child.stdin.end("{}");
+  const deadline = Date.now() + 2000;
+  while (headers.length === 0 && Date.now() < deadline) await new Promise(r => setTimeout(r, 20));
+  expect(headers).toHaveLength(1);
+  expect(headers[0]!["x-from-curlrc"]).toBeUndefined();
 });

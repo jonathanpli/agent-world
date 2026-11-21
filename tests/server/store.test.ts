@@ -1,4 +1,4 @@
-import { mkdtempSync } from "node:fs";
+import { chmodSync, mkdtempSync, statSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
@@ -132,4 +132,19 @@ test("sessions saved before the arriving migration load as known with nothing he
   const store = openStore(path);
   expect(store.load().sessions[0]).toMatchObject({ key: "t:s1", tier: 3, tierKnown: true, pendingXp: 0, pendingStats: { tasks: 0, tools: 0 }, graceSince: null });
   store.close();
+});
+
+test("a data directory the store creates is private (0700) and so is the database file (0600)", () => {
+  const root = mkdtempSync(join(tmpdir(), "aw-perm-"));
+  const path = join(root, "home", "w.db");
+  openStore(path).close();
+  expect(statSync(join(root, "home")).mode & 0o777).toBe(0o700);
+  expect(statSync(path).mode & 0o777).toBe(0o600);
+});
+
+test("an existing data directory keeps its mode", () => {
+  const dir = mkdtempSync(join(tmpdir(), "aw-perm-"));
+  chmodSync(dir, 0o755);
+  openStore(join(dir, "w.db")).close();
+  expect(statSync(dir).mode & 0o777).toBe(0o755);
 });
