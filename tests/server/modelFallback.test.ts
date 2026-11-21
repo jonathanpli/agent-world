@@ -1,4 +1,5 @@
-import { mkdtempSync, writeFileSync } from "node:fs";
+import { execFileSync } from "node:child_process";
+import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { expect, test } from "vitest";
@@ -43,4 +44,17 @@ test("placeholder models such as <synthetic> are skipped", async () => {
     line({ type: "assistant", message: { model: "<synthetic>" } })))).toBe("claude-opus-5-5");
   expect(await modelFromTranscript(file("only.jsonl", line({ type: "assistant", message: { model: "<synthetic>" } })))).toBeNull();
   expect(await modelFromTranscript(file("blank.jsonl", line({ type: "assistant", message: { model: "" } })))).toBeNull();
+});
+
+test("a directory or a FIFO → null promptly", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "aw-tr-"));
+  const sub = join(dir, "d.jsonl"); mkdirSync(sub);
+  expect(await modelFromTranscript(sub)).toBeNull();
+  if (process.platform !== "win32") {
+    const fifo = join(dir, "f.jsonl");
+    execFileSync("mkfifo", [fifo]);
+    const t0 = Date.now();
+    expect(await modelFromTranscript(fifo)).toBeNull();
+    expect(Date.now() - t0).toBeLessThan(500);
+  }
 });

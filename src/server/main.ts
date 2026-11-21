@@ -4,21 +4,24 @@ import { homedir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { CONFIG } from "../shared/config";
+import { serverEnv } from "./env";
 
-// node:sqlite prints an ExperimentalWarning when first loaded. Swap Node's default warning printer for one that skips
-// only that warning, before the store is loaded (hence the dynamic imports below: static imports would run first).
+// node:sqlite prints an ExperimentalWarning when first loaded. Wrap Node's own warning listeners so they skip only that
+// warning (keeping --no-warnings and --trace-warnings behaviour), before the store is loaded (hence the dynamic imports
+// below: static imports would run first).
+const warningListeners = process.listeners("warning");
 process.removeAllListeners("warning");
 process.on("warning", w => {
   if (w.name === "ExperimentalWarning" && /SQLite/i.test(w.message)) return;
-  console.warn(`${w.name}: ${w.message}`);
+  for (const l of warningListeners) l(w);
 });
 
 const { openStore } = await import("./store");
 const { createApp } = await import("./app");
 
 const demo = process.argv.includes("--demo");
-const home = process.env.AGENT_WORLD_HOME ?? join(homedir(), ".agent-world");
-const port = Number(process.env.AGENT_WORLD_PORT ?? (demo ? CONFIG.demoPort : CONFIG.port));
+const { port, home, warnings } = serverEnv(process.env, demo, homedir());
+for (const w of warnings) console.warn(w);
 const clientDir = fileURLToPath(new URL("../../dist/client", import.meta.url));
 
 const store = openStore(join(home, demo ? "demo.db" : "world.db"));
@@ -34,7 +37,9 @@ server.on("error", (e: NodeJS.ErrnoException) => {
 
 server.listen(port, "127.0.0.1", () => {
   console.log(`Agent World${demo ? " (demo)" : ""} running at http://127.0.0.1:${port}`);
-  const ticker = setInterval(app.tick, CONFIG.tickMs);
+  const ticker = setInterval(() => {
+    try { app.tick(); } catch (e) { console.error("agent-world: tick failed", e); }
+  }, CONFIG.tickMs);
   const shutdown = (): void => {
     clearInterval(ticker);
     app.close();

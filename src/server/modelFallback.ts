@@ -1,9 +1,10 @@
-import { open } from "node:fs/promises";
+import { open, stat } from "node:fs/promises";
 import { CONFIG } from "../shared/config";
 
 /** Reads the tail of a Claude Code transcript and returns the most recent real assistant `message.model`. Never rejects. */
 export async function modelFromTranscript(path: string): Promise<string | null> {
   try {
+    if (!(await stat(path)).isFile()) return null;   // a directory or FIFO would fail or block forever
     const fh = await open(path, "r");
     let text: string;
     try {

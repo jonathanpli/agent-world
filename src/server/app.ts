@@ -59,6 +59,22 @@ function decode(s: string): string | null {
   try { return decodeURIComponent(s); } catch { return null; }
 }
 
+const LOCAL_HOSTNAMES = new Set(["127.0.0.1", "localhost", "[::1]"]);
+
+/** True when `value` (a Host header, or an Origin URL with `asUrl`) names this machine. Anything unparsable is foreign. */
+function isLocal(value: string | undefined, asUrl: boolean): boolean {
+  if (value === undefined || value === "") return false;
+  try { return LOCAL_HOSTNAMES.has(new URL(asUrl ? value : `http://${value}`).hostname); } catch { return false; }
+}
+
+/** Resolves with `p`, or with `fallback` once `ms` pass first. A rejection also yields `fallback`. */
+function within<T>(p: Promise<T>, ms: number, fallback: T): Promise<T> {
+  return new Promise(res => {
+    const timer = setTimeout(() => res(fallback), ms);
+    p.then(v => { clearTimeout(timer); res(v); }, () => { clearTimeout(timer); res(fallback); });
+  });
+}
+
 const isRecord = (v: unknown): v is Record<string, unknown> => typeof v === "object" && v !== null && !Array.isArray(v);
 
 export function createApp(opts: AppOptions): App {
@@ -88,7 +104,7 @@ export function createApp(opts: AppOptions): App {
   }
 
   async function pipeline(ev: AgentEvent): Promise<void> {
-    ev.repoPath = await resolveRepo(ev.repoPath);
+    ev.repoPath = await within(resolveRepo(ev.repoPath), CONFIG.repoResolveTimeoutMs, ev.repoPath);
     const key = `${ev.source}:${ev.sessionId}`;
     const transcriptPath = ev.detail?.transcriptPath;
     if (ev.model === undefined && (sessionModels.get(key) ?? null) === null && transcriptPath !== undefined) {
@@ -96,7 +112,7 @@ export function createApp(opts: AppOptions): App {
       const last = modelTriedAt.get(key);
       if (last === undefined || t - last >= CONFIG.modelRetryMs) {
         modelTriedAt.set(key, t);
-        const m = await readModel(transcriptPath);
+        const m = await within(readModel(transcriptPath), CONFIG.modelReadTimeoutMs, null);
         if (m !== null) {
           ev.model = m;
           const tier = tierForModel(m);
@@ -124,11 +140,12 @@ export function createApp(opts: AppOptions): App {
     }
   }
 
-  async function ingest(req: IncomingMessage, res: ServerResponse, source: string): Promise<void> {
+  async function ingest(req: IncomingMessage, res: ServerResponse, source: string, foreignOrigin: boolean): Promise<void> {
     const body = await readBody(req);
     try {
       if (demo) return;
-      const adapter = ADAPTERS[source];
+      if (foreignOrigin) { console.warn("agent-world: ingest from a browser origin discarded"); return; }
+      const adapter = Object.hasOwn(ADAPTERS, source) ? ADAPTERS[source] : undefined;
       if (adapter === undefined) { console.warn(`agent-world: ingest from unknown source "${source}"`); return; }
       if (body === null) { console.warn("agent-world: ingest body unreadable or too large"); return; }
       let raw: unknown;
@@ -200,14 +217,20 @@ export function createApp(opts: AppOptions): App {
   }
 
   async function route(req: IncomingMessage, res: ServerResponse): Promise<void> {
+    // Loopback peer and a local Host header (defeats DNS rebinding); every non-GET from a foreign browser Origin is refused.
     if (!LOOPBACK.has(req.socket.remoteAddress ?? "")) { sendStatus(res, 403); return; }
+    if (!isLocal(req.headers.host, false)) { sendStatus(res, 403); return; }
     const method = req.method ?? "GET";
     const path = new URL(req.url ?? "/", "http://localhost").pathname;
+    const origin = req.headers.origin;
+    const foreignOrigin = method !== "GET" && origin !== undefined && !isLocal(origin, true);
     let m: RegExpMatchArray | null;
+
+    if (method === "POST" && (m = path.match(/^\/ingest\/([^/]+)$/))) return ingest(req, res, decode(m[1]!) ?? m[1]!, foreignOrigin);
+    if (foreignOrigin) { sendStatus(res, 403); return; }
 
     const badEscape = (): void => sendJson(res, 400, { error: "malformed URL escape" });
 
-    if (method === "POST" && (m = path.match(/^\/ingest\/([^/]+)$/))) return ingest(req, res, decode(m[1]!) ?? m[1]!);
     if (method === "GET" && path === "/events") return openStream(req, res);
     if (method === "GET" && path === "/api/snapshot") return sendJson(res, 200, world.snapshot(now(), demo));
     if (method === "PATCH" && (m = path.match(/^\/api\/characters\/([^/]+)$/))) {

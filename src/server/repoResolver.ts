@@ -10,23 +10,30 @@ function git(cwd: string, ...args: string[]): Promise<string> {
   });
 }
 
-async function resolveRepo(cwd: string): Promise<string> {
+/** The repo root, or null when git cannot say (not a repo, missing dir, git error or timeout). */
+async function gitRoot(cwd: string): Promise<string | null> {
   try {
     const common = await git(cwd, "--path-format=absolute", "--git-common-dir");
     if (common.endsWith("/.git")) return dirname(common);   // collapses worktrees into their main repo
     const top = await git(cwd, "--show-toplevel");
-    return top === "" ? cwd : top;
+    return top === "" ? null : top;
   } catch {
-    return cwd;
+    return null;
   }
 }
 
-/** Maps a working directory to its repo root (main repo for worktrees), or the directory itself. Cached per cwd; never rejects. */
+/**
+ * Maps a working directory to its repo root (main repo for worktrees), or the directory itself.
+ * Only successful git resolutions are cached, so a directory that later becomes a repo is picked up. Never rejects.
+ */
 export function createRepoResolver(): (cwd: string) => Promise<string> {
-  const cache = new Map<string, Promise<string>>();
-  return cwd => {
-    let p = cache.get(cwd);
-    if (p === undefined) { p = resolveRepo(cwd); cache.set(cwd, p); }
-    return p;
+  const cache = new Map<string, string>();
+  return async cwd => {
+    const hit = cache.get(cwd);
+    if (hit !== undefined) return hit;
+    const root = await gitRoot(cwd);
+    if (root === null) return cwd;
+    cache.set(cwd, root);
+    return root;
   };
 }

@@ -25,6 +25,8 @@ export const CONFIG = {
   modelRetryMs: 30_000,
   transcriptTailBytes: 262_144,
   gitTimeoutMs: 1_000,
+  repoResolveTimeoutMs: 2_500,
+  modelReadTimeoutMs: 1_000,
   sseKeepAliveMs: 20_000,
   pruneIntervalMs: 3_600_000,
   cosmeticEveryLevels: 5,

@@ -36,3 +36,11 @@ test("non-repo, missing dir, and a path with spaces (Review Focus 3)", async () 
   mkdirSync(sub);
   expect(await resolve(sub)).toBe(realpathSync(r));
 });
+
+test("a failed resolution is not cached: a directory that becomes a repo is picked up", async () => {
+  const resolve = createRepoResolver();
+  const d = tmp(); const sub = join(d, "sub"); mkdirSync(sub);
+  expect(await resolve(sub)).toBe(sub);
+  git("init", "-q", d);
+  expect(await resolve(sub)).toBe(d);
+});

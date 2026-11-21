@@ -1,9 +1,10 @@
 import { readFileSync } from "node:fs";
-import { createServer, type Server } from "node:http";
+import { createServer, request, type IncomingMessage, type Server, type ServerResponse } from "node:http";
 import type { AddressInfo } from "node:net";
 import { afterEach, expect, test, vi } from "vitest";
 import { createApp, type App, type AppOptions } from "../../src/server/app";
 import { openStore, type Store } from "../../src/server/store";
+import { CONFIG } from "../../src/shared/config";
 import type { AgentEvent, Delta, Snapshot } from "../../src/shared/types";
 
 const fx = (name: string): string => readFileSync(`tests/fixtures/claude-code/${name}.json`, "utf8");
@@ -24,6 +25,7 @@ async function start(opts: Partial<AppOptions> = {}): Promise<Running> {
 }
 
 afterEach(async () => {
+  vi.restoreAllMocks();
   for (const a of aborts.splice(0)) a.abort();
   for (const r of running.splice(0)) {
     r.app.close();
@@ -90,7 +92,6 @@ test("junk ingest always 204 and changes nothing (Review Focus 2)", async () => 
   expect(s.characters).toHaveLength(0);
   expect(store.eventCount()).toBe(0);
   expect(warn).toHaveBeenCalledTimes(6);
-  warn.mockRestore();
 });
 
 test("ingested events are logged without the transcript path", async () => {
@@ -208,6 +209,116 @@ test("malformed URL escapes: 400 on the API, 204 on ingest", async () => {
   const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
   expect((await ingest(base, fx("SessionStart"), "%E0%A4%A")).status).toBe(204);
   expect(warn).toHaveBeenCalledTimes(1);
-  warn.mockRestore();
+  expect((await snapshot(base)).sessions).toHaveLength(0);
+});
+
+/** Raw request with full control over headers (fetch does not let a test set Host). */
+function raw(base: string, method: string, path: string, headers: Record<string, string>, body?: string): Promise<{ status: number; body: string }> {
+  const { hostname, port } = new URL(base);
+  return new Promise((res, rej) => {
+    const req = request({ hostname, port, method, path, headers }, r => {
+      let data = ""; r.setEncoding("utf8");
+      r.on("data", c => { data += c; });
+      r.on("end", () => res({ status: r.statusCode!, body: data }));
+    });
+    req.on("error", rej);
+    req.end(body);
+  });
+}
+
+test("a foreign Host header is refused (DNS rebinding)", async () => {
+  const { base } = await start();
+  for (const path of ["/api/snapshot", "/events"]) {
+    expect((await raw(base, "GET", path, { host: "evil.example:4317" })).status).toBe(403);
+  }
+  expect((await raw(base, "GET", "/api/snapshot", { host: "localhost:5173" })).status).toBe(200);
+  expect((await raw(base, "GET", "/api/snapshot", { host: "[::1]:4317" })).status).toBe(200);
+});
+
+test("a missing Host header is refused", async () => {
+  const { app } = await start();
+  const res = fakeRes();
+  app.handler(fakeReq({ remoteAddress: "127.0.0.1", headers: {} }), res);
+  await res.done;
+  expect(res.status).toBe(403);
+});
+
+test("a foreign browser Origin is refused on writes, and its ingest is discarded", async () => {
+  const { base } = await start();
+  vi.spyOn(console, "warn").mockImplementation(() => {});
+  const evil = { origin: "https://evil.example", "content-type": "application/json" };
+  expect((await raw(base, "POST", "/ingest/claude-code", { origin: "https://evil.example" }, fx("SessionStart"))).status).toBe(204);
+  expect((await snapshot(base)).sessions).toHaveLength(0);
+  expect((await raw(base, "POST", "/ingest/claude-code", {}, fx("Stop"))).status).toBe(204);    // like the hook's curl
+  const s = await snapshot(base);
+  expect(s.sessions).toHaveLength(1);
+  expect(s.sessions[0]!.attention).toBe(true);
+  expect((await raw(base, "POST", `/api/sessions/${encodeURIComponent(SESSION_KEY)}/ack`, evil)).status).toBe(403);
+  expect((await snapshot(base)).sessions[0]!.attention).toBe(true);
+  const id = s.characters[0]!.id;
+  expect((await raw(base, "PATCH", `/api/characters/${id}`, evil, JSON.stringify({ name: "Pwned" }))).status).toBe(403);
+  expect((await snapshot(base)).characters[0]!.name).not.toBe("Pwned");
+  const local = await raw(base, "PUT", "/api/settings", { origin: "http://localhost:5173", "content-type": "application/json" }, JSON.stringify({ theme: "space" }));
+  expect(local.status).toBe(200);
+  expect((await snapshot(base)).settings.theme).toBe("space");
+});
+
+type FakeRes = ServerResponse & { status: number | undefined; done: Promise<void> };
+function fakeReq(o: { remoteAddress: string; headers: Record<string, string> }): IncomingMessage {
+  return { socket: { remoteAddress: o.remoteAddress }, method: "GET", url: "/api/snapshot", headers: o.headers } as unknown as IncomingMessage;
+}
+function fakeRes(): FakeRes {
+  let finish!: () => void;
+  const r = {
+    status: undefined as number | undefined, headersSent: false, done: new Promise<void>(f => { finish = f; }),
+    writeHead(code: number) { r.status = code; r.headersSent = true; return r; },
+    end() { finish(); return r; },
+  };
+  return r as unknown as FakeRes;
+}
+
+test("a non-loopback peer is refused", async () => {
+  const { app } = await start();
+  for (const remoteAddress of ["10.0.0.5", "192.168.1.2", "::ffff:10.0.0.5"]) {
+    const res = fakeRes();
+    app.handler(fakeReq({ remoteAddress, headers: { host: "127.0.0.1:4317" } }), res);
+    await res.done;
+    expect(res.status).toBe(403);
+  }
+  const ok = fakeRes();
+  app.handler(fakeReq({ remoteAddress: "::1", headers: { host: "127.0.0.1:4317" } }), ok);
+  await ok.done;
+  expect(ok.status).toBe(200);
+});
+
+test("a transcript read that never finishes does not stall the queue", async () => {
+  const { base } = await start({ readModel: () => new Promise<string | null>(() => {}) });
+  const t0 = Date.now();
+  expect((await ingest(base, fx("SessionStart"))).status).toBe(204);
+  expect((await ingest(base, fx("Stop"))).status).toBe(204);
+  const s = await snapshot(base);
+  expect(s.sessions).toHaveLength(1);
+  expect(s.sessions[0]!.state).toBe("done");
+  expect(Date.now() - t0).toBeLessThan(CONFIG.modelReadTimeoutMs * 3);
+});
+
+test("a repo resolution that never finishes falls back to the cwd", async () => {
+  const { base } = await start({ resolveRepo: () => new Promise<string>(() => {}) });
+  await ingest(base, fx("SessionStart"));
+  const s = await snapshot(base);
+  expect(s.sessions).toHaveLength(1);
+  expect(s.repos[0]!.path).toBe(JSON.parse(fx("SessionStart")).cwd);
+}, CONFIG.repoResolveTimeoutMs * 3);
+
+test("prototype keys are unknown sources, not adapters", async () => {
+  const { base } = await start();
+  const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+  const error = vi.spyOn(console, "error").mockImplementation(() => {});
+  for (const source of ["constructor", "__proto__", "toString", "hasOwnProperty"]) {
+    expect((await ingest(base, fx("SessionStart"), source)).status).toBe(204);
+  }
+  expect(warn).toHaveBeenCalledTimes(4);
+  expect(warn.mock.calls.every(c => String(c[0]).includes("unknown source"))).toBe(true);
+  expect(error).not.toHaveBeenCalled();
   expect((await snapshot(base)).sessions).toHaveLength(0);
 });
