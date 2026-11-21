@@ -5,6 +5,7 @@ import { drawBase, poseFor } from "../../engine/sprite";
 import type { Ctx, Particle, Place, Point, Theme } from "../../engine/theme";
 import { drawCat } from "./cat";
 import { chair, drawWorkSpot } from "./desks";
+import { drawAction, drawCompaction, drawContextGauge, drawSidekick, socialSpots } from "./extras";
 import { OFFICE } from "./palette";
 import { AREA, drawBackdrop, drawPlace, LOUNGE, PLACE } from "./room";
 
@@ -99,4 +100,9 @@ export const office: Theme = {
   drawCharacter,
   effects: { celebrate, levelUp },
   drawAmbient: drawCat,
+  drawAction,
+  drawSidekick,
+  drawContextGauge,
+  drawCompaction,
+  socialSpots,
 };

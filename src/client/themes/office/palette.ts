@@ -38,6 +38,13 @@ export const OFFICE = {
   printer: { body: "#e6e6ea", bodyD: "#b9bac4", paper: "#ffffff", light: "#5cf08a" },
   cat: { fur: "#e8954a", stripe: "#c0702e", belly: "#f7dcb6", eye: "#2f6a35", nose: "#e07a7a" },
   aura: { xhigh: "#8fe3ff", max: "#ffcf5a" },
+  // tool actions, the paper-stack gauge, the bin and the intern (extras.ts)
+  paper: { sheet: "#fffdf6", edge: "#d9d2c2", line: "#8f9bb3", hot: "#ffd0c8", note: "#e8443a", folder: "#e9bd62", folderD: "#c4963f" },
+  term: { bg: "#0f2416", text: "#5cf08a", textD: "#2f9a52" },
+  web: { sky: "#cfeaff", sea: "#3f7fd6", land: "#4fb860", ring: "#ffffff" },
+  fail: { bg: "#5a1820", flash: "#e8443a", mark: "#ffffff", spark: ["#ffe066", "#ffb02e", "#ffffff"], shake: "#ffffff" },
+  bin: { body: "#7d8796", bodyL: "#a3adbb", rim: "#5b6472" },
+  intern: { skin: "#f2c9a0", hair: "#6b4a2f", shirt: "#8fc3e8", shirtS: "#6a9fc8", pants: "#3d4366", lanyard: "#e0503c", badge: "#fffaf0", board: "#a87442", puff: "#ffffff" },
   confetti: ["#ff5d73", "#ffd23f", "#3bceac", "#5aa9e6", "#c77dff", "#ff9f1c"],
   sparkle: ["#ffe066", "#fff3b0", "#ffd23f", "#ffffff"],
   codeScrollHz: 5,
