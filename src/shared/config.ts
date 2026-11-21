@@ -32,6 +32,7 @@ export const CONFIG = {
   ingestBodyMax: 5_000_000,
   tickMs: 5_000,
   modelRetryMs: 2_000,
+  contextReadMs: 2_000,                           // a session's transcript is read for context at most once per this; a read inside it is deferred to its end
   modelRetryMax: 30,                              // transcript reads per session before giving up on its model
   modelGraceMs: 15_000,                           // a session with no tier this long after its first prompt joins at defaultTier
   defaultTier: 2,

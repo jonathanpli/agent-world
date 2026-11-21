@@ -1,12 +1,17 @@
 import { readFileSync } from "node:fs";
 import { createServer, request, type IncomingMessage, type Server, type ServerResponse } from "node:http";
 import type { AddressInfo } from "node:net";
+import { Readable } from "node:stream";
 import { afterEach, expect, test, vi } from "vitest";
 import { createApp, type App, type AppOptions } from "../../src/server/app";
 import { openStore, type Store } from "../../src/server/store";
+import type { TranscriptInfo } from "../../src/server/transcript";
 import { CONFIG } from "../../src/shared/config";
 import type { AgentEvent, Delta, Snapshot } from "../../src/shared/types";
 
+/** A transcript reader that knows only the model, as the model-fallback tests need. */
+const byModel = (read: (path: string) => Promise<string | null>) => async (path: string): Promise<TranscriptInfo> =>
+  ({ model: await read(path), contextTokens: null, boundaries: [] });
 const fx = (name: string): string => readFileSync(`tests/fixtures/claude-code/${name}.json`, "utf8");
 const SESSION_KEY = `claude-code:${JSON.parse(fx("SessionStart")).session_id}`;
 
@@ -16,7 +21,7 @@ const aborts: AbortController[] = [];
 
 async function start(opts: Partial<AppOptions> = {}): Promise<Running> {
   const store = opts.store ?? openStore(":memory:");
-  const app = createApp({ demo: false, resolveRepo: async p => p, readModel: async () => null, ...opts, store });
+  const app = createApp({ demo: false, resolveRepo: async p => p, readTranscript: byModel(async () => null), ...opts, store });
   const server = createServer(app.handler);
   await new Promise<void>(r => server.listen(0, "127.0.0.1", r));
   const r = { base: `http://127.0.0.1:${(server.address() as AddressInfo).port}`, app, store, server };
@@ -33,6 +38,7 @@ afterEach(async () => {
     await new Promise(res => r.server.close(res));
     r.store.close();
   }
+  vi.useRealTimers();
 });
 
 const ingest = (base: string, body: string, source = "claude-code") => fetch(`${base}/ingest/${source}`, { method: "POST", body });
@@ -66,7 +72,7 @@ async function openStream(base: string): Promise<() => Promise<{ event: string; 
 }
 
 test("hook payload in, delta out on the stream", async () => {
-  const { base } = await start({ readModel: async () => "claude-sonnet-4-5" });
+  const { base } = await start({ readTranscript: byModel(async () => "claude-sonnet-4-5") });
   const next = await openStream(base);
   const first = await next();
   expect(first.event).toBe("snapshot");
@@ -107,32 +113,33 @@ test("ingested events are logged without the transcript path", async () => {
 
 test("model fallback fills tier from the transcript", async () => {
   const paths: string[] = [];
-  const { base } = await start({ readModel: async p => { paths.push(p); return "claude-opus-5-5"; } });
+  const { base } = await start({ readTranscript: byModel(async p => { paths.push(p); return "claude-opus-5-5"; }) });
   expect(JSON.parse(fx("SessionStart")).transcript_path).toBeTruthy();
   await ingest(base, fx("SessionStart"));
   const [s] = (await snapshot(base)).sessions;
   expect(s).toMatchObject({ model: "claude-opus-5-5", tier: 3 });
-  expect(paths).toEqual([JSON.parse(fx("SessionStart")).transcript_path]);
+  expect(paths.length).toBeGreaterThan(0);                  // the model read; the context read shares the reader
+  expect(new Set(paths)).toEqual(new Set([JSON.parse(fx("SessionStart")).transcript_path]));
 });
 
 test("model fallback retries at most once per interval while the model is unknown", async () => {
-  let t = 1_000_000; let calls = 0; let answer: string | null = null;
-  const { base } = await start({ now: () => t, readModel: async () => { calls++; return answer; } });
+  // the reader is shared with the context reads, so these model-fallback tests check what the session picks up, not call counts
+  let t = 1_000_000; let answer: string | null = null;
+  const { base } = await start({ now: () => t, readTranscript: byModel(async () => answer) });
   await ingest(base, fx("SessionStart"));
-  await ingest(base, fx("UserPromptSubmit"));
-  expect(calls).toBe(1);
-  t += CONFIG.modelRetryMs; answer = "claude-haiku-4-5";
-  await ingest(base, fx("PostToolUse"));
-  expect(calls).toBe(2);
+  answer = "claude-haiku-4-5";
+  t += CONFIG.modelRetryMs - 1; await ingest(base, fx("UserPromptSubmit"));      // inside the interval: not read for the model
+  expect((await snapshot(base)).sessions[0]).toMatchObject({ model: null, tierKnown: false });
+  t += 1; await ingest(base, fx("PostToolUse"));
   expect((await snapshot(base)).sessions[0]).toMatchObject({ model: "claude-haiku-4-5", tier: 1 });
-  t += 60_000;
-  await ingest(base, fx("PostToolUse"));
-  expect(calls).toBe(2);
+  answer = "claude-opus-5-5";                                                    // known now: the fallback is not consulted again
+  t += 60_000; await ingest(base, fx("PostToolUse"));
+  expect((await snapshot(base)).sessions[0]).toMatchObject({ model: "claude-haiku-4-5", tier: 1 });
 });
 
 test("model fallback reaches a short session whose transcript appears after SessionStart (live run timing)", async () => {
   let t = 1_000_000; let answer: string | null = null;
-  const { base } = await start({ now: () => t, readModel: async () => answer });
+  const { base } = await start({ now: () => t, readTranscript: byModel(async () => answer) });
   await ingest(base, fx("SessionStart"));
   t += 1_300; await ingest(base, fx("UserPromptSubmit"));
   t += 4_000; answer = "claude-opus-5-5";   // the first assistant message is on disk by the first tool call
@@ -142,7 +149,7 @@ test("model fallback reaches a short session whose transcript appears after Sess
 
 test("a session waits for its model before joining the roster: one character for the real fixture replay", async () => {
   let t = 1_000_000; let answer: string | null = null;
-  const { base } = await start({ now: () => t, readModel: async () => answer });
+  const { base } = await start({ now: () => t, readTranscript: byModel(async () => answer) });
   const next = await openStream(base);
   await next();                                             // the snapshot
   const deltas: Delta[] = [];
@@ -174,29 +181,35 @@ test("a session that never resolves its model joins at the default tier when it 
 });
 
 test("model fallback stops once the tier is known, even if the model never resolved", async () => {
-  let t = 1_000_000; let calls = 0;
-  const { base } = await start({ now: () => t, readModel: async () => { calls++; return null; } });
+  let t = 1_000_000; let answer: string | null = null;
+  const { base } = await start({ now: () => t, readTranscript: byModel(async () => answer) });
   await ingest(base, fx("SessionStart"));
   t += CONFIG.modelRetryMs; await ingest(base, fx("UserPromptSubmit"));
   t += CONFIG.modelGraceMs + 1; await ingest(base, fx("PostToolUse"));      // the grace period ends: joins at the default tier
-  const callsAtBind = calls;
-  expect((await snapshot(base)).sessions[0]).toMatchObject({ tierKnown: true, tier: CONFIG.defaultTier });
+  expect((await snapshot(base)).sessions[0]).toMatchObject({ tierKnown: true, tier: CONFIG.defaultTier, model: null });
+  answer = "claude-opus-5-5";
   for (let i = 0; i < 3; i++) { t += CONFIG.modelRetryMs; await ingest(base, fx("PostToolUse")); }
-  expect(calls).toBe(callsAtBind);
+  expect((await snapshot(base)).sessions[0]).toMatchObject({ tier: CONFIG.defaultTier, model: null });
 });
 
 test("model fallback gives up after CONFIG.modelRetryMax reads for a session that never yields a model", async () => {
-  let t = 1_000_000; let calls = 0;
-  const { base } = await start({ now: () => t, readModel: async () => { calls++; return null; } });
-  await ingest(base, fx("SessionStart")); t += CONFIG.modelRetryMs;       // no prompt follows, so the grace clock never starts
-  for (let i = 0; i < CONFIG.modelRetryMax + 5; i++) { await ingest(base, fx("Notification.synthetic")); t += CONFIG.modelRetryMs; }
-  expect(calls).toBe(CONFIG.modelRetryMax);
-  expect((await snapshot(base)).sessions[0]).toMatchObject({ tierKnown: false, characterId: null });   // no prompt yet: still arriving
+  /** SessionStart, then Notifications 2 s apart until `reads` model reads have come back empty; then the model appears. */
+  async function run(reads: number): Promise<Snapshot["sessions"][number]> {
+    let t = 1_000_000; let answer: string | null = null;
+    const { base } = await start({ now: () => t, readTranscript: byModel(async () => answer) });
+    await ingest(base, fx("SessionStart")); t += CONFIG.modelRetryMs;       // no prompt follows, so the grace clock never starts
+    for (let i = 1; i < reads; i++) { await ingest(base, fx("Notification.synthetic")); t += CONFIG.modelRetryMs; }
+    answer = "claude-opus-5-5";
+    for (let i = 0; i < 5; i++) { await ingest(base, fx("Notification.synthetic")); t += CONFIG.modelRetryMs; }
+    return (await snapshot(base)).sessions[0]!;
+  }
+  expect(await run(CONFIG.modelRetryMax - 1)).toMatchObject({ model: "claude-opus-5-5", tier: 3 });   // the last allowed read finds it
+  expect(await run(CONFIG.modelRetryMax)).toMatchObject({ model: null, tierKnown: false, characterId: null });   // no prompt yet: still arriving
 });
 
 test("interactive start: first prompt 20 s after SessionStart, model on the first tool: one character", async () => {
   let t = 1_000_000; let answer: string | null = null;
-  const { base } = await start({ now: () => t, readModel: async () => answer });
+  const { base } = await start({ now: () => t, readTranscript: byModel(async () => answer) });
   await ingest(base, fx("SessionStart"));
   t += 20_000; await ingest(base, fx("UserPromptSubmit"));
   expect((await snapshot(base)).characters).toEqual([]);
@@ -216,7 +229,7 @@ test("an arrival that quits at once leaves no character", async () => {
 });
 
 test("PATCH character", async () => {
-  const { base } = await start({ readModel: async () => "claude-sonnet-4-5" });
+  const { base } = await start({ readTranscript: byModel(async () => "claude-sonnet-4-5") });
   await ingest(base, fx("SessionStart"));
   const id = (await snapshot(base)).characters[0]!.id;
   const ok = await send(base, "PATCH", `/api/characters/${id}`, { name: "Zed" });
@@ -246,6 +259,17 @@ test("PUT settings", async () => {
   const bad = await send(base, "PUT", "/api/settings", { rosterCap: 0 });
   expect(bad.status).toBe(400);
   expect(typeof ((await bad.json()) as { error: unknown }).error).toBe("string");
+});
+
+test("PUT settings treats learnedLimits as the unknown key it is", async () => {
+  const { base, store } = await start();
+  for (const body of [{ bogus: 1 }, { learnedLimits: { "claude-opus-5-5": 1 } }]) {
+    const res = await send(base, "PUT", "/api/settings", body);
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual(CONFIG.defaultSettings);
+  }
+  expect(store.load().learnedLimits).toEqual({});
+  expect(store.load().settings).toEqual(CONFIG.defaultSettings);
 });
 
 test("demo mode discards real ingest", async () => {
@@ -329,7 +353,7 @@ test("a missing Host header is refused", async () => {
 });
 
 test("a foreign browser Origin is refused on writes, and its ingest is discarded", async () => {
-  const { base } = await start({ readModel: async () => "claude-sonnet-4-5" });
+  const { base } = await start({ readTranscript: byModel(async () => "claude-sonnet-4-5") });
   vi.spyOn(console, "warn").mockImplementation(() => {});
   const evil = { origin: "https://evil.example", "content-type": "application/json" };
   expect((await raw(base, "POST", "/ingest/claude-code", { origin: "https://evil.example" }, fx("SessionStart"))).status).toBe(204);
@@ -377,7 +401,7 @@ test("a non-loopback peer is refused", async () => {
 });
 
 test("a transcript read that never finishes does not stall the queue", async () => {
-  const { base } = await start({ readModel: () => new Promise<string | null>(() => {}) });
+  const { base } = await start({ readTranscript: byModel(() => new Promise<string | null>(() => {})) });
   const t0 = Date.now();
   expect((await ingest(base, fx("SessionStart"))).status).toBe(204);
   expect((await ingest(base, fx("Stop"))).status).toBe(204);
@@ -409,7 +433,7 @@ test("prototype keys are unknown sources, not adapters", async () => {
 });
 
 test("dismiss ends a session through the end path; unknown keys 404; foreign origins 403", async () => {
-  const { base, store } = await start({ readModel: async () => "claude-sonnet-4-5" });
+  const { base, store } = await start({ readTranscript: byModel(async () => "claude-sonnet-4-5") });
   const next = await openStream(base);
   await next();                                         // snapshot
   await ingest(base, fx("SessionStart"));
@@ -428,11 +452,11 @@ test("dismiss ends a session through the end path; unknown keys 404; foreign ori
 });
 
 test("starting in demo mode ends the sessions a previous demo run left in the store", async () => {
-  const { base, store } = await start({ readModel: async () => "claude-sonnet-4-5" });
+  const { base, store } = await start({ readTranscript: byModel(async () => "claude-sonnet-4-5") });
   await ingest(base, fx("SessionStart"));
   await ingest(base, fx("UserPromptSubmit"));
   expect(store.load().sessions).toHaveLength(1);
-  const demo = createApp({ store, demo: true, resolveRepo: async p => p, readModel: async () => null });
+  const demo = createApp({ store, demo: true, resolveRepo: async p => p, readTranscript: byModel(async () => null) });
   expect(store.load().sessions).toHaveLength(0);
   expect(store.load().characters).toHaveLength(1);
   const server = createServer(demo.handler);
@@ -446,7 +470,7 @@ test("starting in demo mode ends the sessions a previous demo run left in the st
 });
 
 test("an unrecognised model id binds at the default tier at once, keeping the model string", async () => {
-  const { base } = await start({ readModel: async () => "gpt-9-turbo" });
+  const { base } = await start({ readTranscript: byModel(async () => "gpt-9-turbo") });
   await ingest(base, fx("SessionStart"));
   const s = (await snapshot(base)).sessions[0]!;
   expect(s).toMatchObject({ tierKnown: true, tier: CONFIG.defaultTier, model: "gpt-9-turbo" });
@@ -455,7 +479,7 @@ test("an unrecognised model id binds at the default tier at once, keeping the mo
 
 test("blocking Stop hook round trip: repeat Stop and idle_prompt go through ingest, SSE and the store without a warning or a second notice", async () => {
   const warn = vi.spyOn(console, "warn");
-  const { base, store } = await start({ readModel: async () => "claude-sonnet-4-5" });
+  const { base, store } = await start({ readTranscript: byModel(async () => "claude-sonnet-4-5") });
   const next = await openStream(base);
   await next();
   const idle = JSON.stringify({ ...JSON.parse(fx("Notification.synthetic")), notification_type: "idle_prompt", message: "Claude is waiting for your input" });
@@ -469,4 +493,128 @@ test("blocking Stop hook round trip: repeat Stop and idle_prompt go through inge
   expect(store.load().sessions[0]).toMatchObject({ state: "done" });
   expect(store.eventCount()).toBe(5);
   expect(warn).not.toHaveBeenCalled();
+});
+
+// ---- context reads: throttled transcript reads turned into `context` events ----
+
+const START = JSON.parse(fx("SessionStart")) as { session_id: string; transcript_path: string; cwd: string };
+const startWithModel = JSON.stringify({ ...START, model: "claude-opus-5-5" });   // the tier is known: no model-fallback read
+const postCompact = JSON.stringify({ session_id: START.session_id, transcript_path: START.transcript_path, cwd: START.cwd, hook_event_name: "PostCompact", trigger: "auto" });
+const flush = () => new Promise(r => setImmediate(r));
+
+/** An app on fake timeouts and a hand-moved clock, with a reader that returns `rig.info`, and a store that records what it is given. */
+async function contextRig() {
+  vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+  const rig = { t: 1_000_000, reads: 0, info: { model: null, contextTokens: null, boundaries: [] } as TranscriptInfo, logged: [] as AgentEvent[], persists: 0 };
+  const inner = openStore(":memory:");
+  const store: Store = {
+    ...inner,
+    logEvent: e => { rig.logged.push(structuredClone(e)); inner.logEvent(e); },
+    persist: d => { rig.persists++; inner.persist(d); },
+  };
+  const r = await start({ store, now: () => rig.t, readTranscript: async () => { rig.reads++; return structuredClone(rig.info); } });
+  /** Moves the clock and the fake timeouts together. */
+  const advance = async (ms: number) => { rig.t += ms; await vi.advanceTimersByTimeAsync(ms); await flush(); };
+  const context = async () => (await snapshot(r.base)).sessions[0]?.context ?? null;
+  return { ...r, rig, advance, context };
+}
+
+test("a hook payload reads the transcript and injects the context reading", async () => {
+  const { base, rig, advance, context } = await contextRig();
+  await ingest(base, startWithModel); await flush();
+  expect(rig.reads).toBe(1);
+  expect(await context()).toBeNull();                           // no reading yet: nothing injected
+  rig.info = { model: "claude-opus-5-5", contextTokens: 50_000, boundaries: [] };
+  await advance(CONFIG.contextReadMs);
+  await ingest(base, fx("PostToolUse")); await flush();
+  expect(rig.reads).toBe(2);
+  expect(await context()).toMatchObject({ tokens: 50_000, limit: 200_000 });
+});
+
+test("five payloads inside the throttle window cause exactly two reads: leading and trailing", async () => {
+  const { base, rig, advance, context } = await contextRig();
+  rig.info = { model: "claude-opus-5-5", contextTokens: 50_000, boundaries: [] };
+  await ingest(base, startWithModel); await flush();
+  for (let i = 0; i < 4; i++) { await advance(400); await ingest(base, fx("PostToolUse")); await flush(); }
+  expect(rig.reads).toBe(1);
+  rig.info = { ...rig.info, contextTokens: 60_000 };
+  await advance(CONFIG.contextReadMs - 1_600);                    // the 2 000 ms mark: the trailing read
+  expect(rig.reads).toBe(2);
+  expect(await context()).toMatchObject({ tokens: 60_000 });
+  await advance(10_000);
+  expect(rig.reads).toBe(2);
+});
+
+test("an unchanged reading injects nothing; a new boundary uuid does", async () => {
+  const { base, rig, advance, context } = await contextRig();
+  rig.info = { model: "claude-opus-5-5", contextTokens: 50_000, boundaries: [] };
+  await ingest(base, startWithModel); await flush();
+  expect(await context()).toMatchObject({ tokens: 50_000 });
+  let before = rig.persists;
+  await advance(CONFIG.contextReadMs);
+  await ingest(base, fx("PostToolUse")); await flush();
+  expect(rig.reads).toBe(2);
+  expect(rig.persists).toBe(before + 1);                          // the tool event only
+  rig.info = { ...rig.info, boundaries: [{ uuid: "u1", trigger: "manual", preTokens: 90_000, postTokens: 20_000 }] };
+  before = rig.persists;
+  await advance(CONFIG.contextReadMs);
+  await ingest(base, fx("PostToolUse")); await flush();
+  expect(rig.persists).toBe(before + 2);                          // the tool event and the reading
+});
+
+test("a PostCompact payload triggers a read, logs no event and warns nothing", async () => {
+  const { base, rig, advance, context, store } = await contextRig();
+  const warn = vi.spyOn(console, "warn");
+  await ingest(base, startWithModel); await flush();
+  rig.info = { model: "claude-opus-5-5", contextTokens: 35_119, boundaries: [{ uuid: "u1", trigger: "auto", preTokens: 217_132, postTokens: 35_119 }] };
+  await advance(CONFIG.contextReadMs);
+  expect((await ingest(base, postCompact)).status).toBe(204); await flush();
+  expect(rig.reads).toBe(2);
+  expect(store.eventCount()).toBe(1);
+  expect(warn).not.toHaveBeenCalled();
+  expect(await context()).toMatchObject({ tokens: 35_119 });
+});
+
+test("context events never reach store.logEvent", async () => {
+  const { base, rig, advance, context } = await contextRig();
+  rig.info = { model: "claude-opus-5-5", contextTokens: 50_000, boundaries: [] };
+  await ingest(base, startWithModel); await flush();
+  await advance(CONFIG.contextReadMs);
+  rig.info = { ...rig.info, contextTokens: 70_000 };
+  await ingest(base, fx("PostToolUse")); await flush();
+  expect(await context()).toMatchObject({ tokens: 70_000 });
+  expect(rig.logged.map(e => e.kind)).toEqual(["session_start", "tool"]);
+});
+
+test("a payload for a session the world does not know injects nothing visible", async () => {
+  const { base, rig, advance } = await contextRig();
+  rig.info = { model: "claude-opus-5-5", contextTokens: 50_000, boundaries: [] };
+  await ingest(base, postCompact); await flush();
+  await advance(CONFIG.contextReadMs);
+  const s = await snapshot(base);
+  expect(s.sessions).toEqual([]);
+  expect(s.characters).toEqual([]);
+  expect(rig.logged).toEqual([]);
+});
+
+test("close() leaves no pending timers", async () => {
+  const { app, rig, advance } = await contextRig();
+  /** Ingest straight through the handler: fetch keeps timeouts of its own, which would muddle the count. */
+  const direct = async (body: string) => {
+    const req = Object.assign(Readable.from([Buffer.from(body)]), {
+      socket: { remoteAddress: "127.0.0.1" }, method: "POST", url: "/ingest/claude-code", headers: { host: "127.0.0.1:4317" },
+    }) as unknown as IncomingMessage;
+    const res = fakeRes();
+    app.handler(req, res);
+    await res.done; await flush();
+  };
+  await direct(startWithModel);
+  await advance(400);
+  const others = vi.getTimerCount();                              // fetch from earlier tests may still hold a timeout or two
+  await direct(fx("PostToolUse"));                                // inside the window: a trailing read is pending
+  expect(vi.getTimerCount()).toBe(others + 1);
+  app.close();
+  expect(vi.getTimerCount()).toBe(others);
+  await advance(CONFIG.contextReadMs);
+  expect(rig.reads).toBe(1);
 });

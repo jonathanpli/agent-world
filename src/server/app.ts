@@ -7,19 +7,19 @@ import { tierForModel } from "../adapters/claudeCode";
 import { createWorld } from "../core/world";
 import { CONFIG } from "../shared/config";
 import type { AgentEvent, Delta, Look, Settings } from "../shared/types";
-import { modelFromTranscript } from "./modelFallback";
 import { createRepoResolver } from "./repoResolver";
 import type { Store } from "./store";
+import { readTranscript as readTranscriptFile, type TranscriptInfo } from "./transcript";
 
 export type AppOptions = {
   store: Store; demo: boolean; now?: () => number; staticDir?: string;
-  resolveRepo?: (cwd: string) => Promise<string>; readModel?: (transcriptPath: string) => Promise<string | null>;
+  resolveRepo?: (cwd: string) => Promise<string>; readTranscript?: (transcriptPath: string) => Promise<TranscriptInfo>;
 };
 export type App = {
   handler: (req: IncomingMessage, res: ServerResponse) => void;
   inject(ev: AgentEvent): Promise<void>;     // the same pipeline ingest uses, after parsing; the demo simulator calls this
   tick(): void;
-  close(): void;                             // ends all SSE streams
+  close(): void;                             // ends all SSE streams and cancels pending transcript reads
 };
 
 const MS_PER_DAY = 86_400_000;
@@ -76,12 +76,16 @@ function within<T>(p: Promise<T>, ms: number, fallback: T): Promise<T> {
 }
 
 const isRecord = (v: unknown): v is Record<string, unknown> => typeof v === "object" && v !== null && !Array.isArray(v);
+const nonEmpty = (v: unknown): v is string => typeof v === "string" && v !== "";
+
+/** A session's context reads: when the last started, the trailing read waiting for the window to end, and the last reading sent. */
+type ContextReads = { lastAt: number; timer: ReturnType<typeof setTimeout> | undefined; path: string; repoPath: string; sent: string | null };
 
 export function createApp(opts: AppOptions): App {
   const { store, demo } = opts;
   const now = opts.now ?? Date.now;
   const resolveRepo = opts.resolveRepo ?? createRepoResolver();
-  const readModel = opts.readModel ?? modelFromTranscript;
+  const readTranscript = opts.readTranscript ?? readTranscriptFile;
   const world = createWorld(store.load(), { rng: Math.random, newId: randomUUID });
 
   /**
@@ -92,6 +96,8 @@ export function createApp(opts: AppOptions): App {
   const sessionWantsModel = new Map(world.snapshot(now(), demo).sessions.map(s => [s.key, wantsModel(s)]));
   /** sessionKey → when the transcript was last read for a model, and how many reads so far (capped at CONFIG.modelRetryMax). */
   const modelTries = new Map<string, { at: number; count: number }>();
+  const contextReads = new Map<string, ContextReads>();
+  let closed = false;
   const streams = new Set<ServerResponse>();
   let queue: Promise<void> = Promise.resolve();
   let lastPruneAt = -Infinity;
@@ -100,7 +106,7 @@ export function createApp(opts: AppOptions): App {
     store.persist(deltas);
     for (const d of deltas) {
       if (d.type === "session") sessionWantsModel.set(d.session.key, wantsModel(d.session));
-      else if (d.type === "session_removed") { sessionWantsModel.delete(d.key); modelTries.delete(d.key); }
+      else if (d.type === "session_removed") { sessionWantsModel.delete(d.key); modelTries.delete(d.key); forgetContextReads(d.key); }
     }
     if (deltas.length === 0) return;
     const msg = `event: delta\ndata: ${JSON.stringify(deltas)}\n\n`;
@@ -119,7 +125,7 @@ export function createApp(opts: AppOptions): App {
       const last = modelTries.get(key);
       if (last === undefined || (t - last.at >= CONFIG.modelRetryMs && last.count < CONFIG.modelRetryMax)) {
         modelTries.set(key, { at: t, count: (last?.count ?? 0) + 1 });
-        const m = await within(readModel(transcriptPath), CONFIG.modelReadTimeoutMs, null);
+        const m = (await within(readTranscript(transcriptPath), CONFIG.modelReadTimeoutMs, null))?.model ?? null;
         if (m !== null) {
           ev.model = m;
           const tier = tierForModel(m);
@@ -132,10 +138,51 @@ export function createApp(opts: AppOptions): App {
     commit(world.apply(ev));
   }
 
-  function inject(ev: AgentEvent): Promise<void> {
-    const run = queue.then(() => pipeline(structuredClone(ev))).catch(e => { console.error("agent-world: event pipeline failed", e); });
+  /** Runs `step` after everything already queued, so events apply in arrival order. */
+  function enqueue(step: () => Promise<void> | void): Promise<void> {
+    const run = queue.then(step).catch(e => { console.error("agent-world: event pipeline failed", e); });
     queue = run;
     return run;
+  }
+
+  function inject(ev: AgentEvent): Promise<void> {
+    return enqueue(() => pipeline(structuredClone(ev)));
+  }
+
+  function forgetContextReads(key: string): void {
+    clearTimeout(contextReads.get(key)?.timer);
+    contextReads.delete(key);
+  }
+
+  /**
+   * Schedules a context read of a known session's transcript: at once when the last one started at least
+   * CONFIG.contextReadMs ago, otherwise one trailing read at that mark (of the latest path), so a burst always ends with a read.
+   */
+  function scheduleContextRead(source: string, sessionId: string, path: string, repoPath: string): void {
+    const key = `${source}:${sessionId}`;
+    if (closed || !sessionWantsModel.has(key)) return;   // the map holds every session the world knows
+    let r = contextReads.get(key);
+    if (r === undefined) { r = { lastAt: -Infinity, timer: undefined, path, repoPath, sent: null }; contextReads.set(key, r); }
+    r.path = path; r.repoPath = repoPath;
+    if (r.timer !== undefined) return;
+    const wait = r.lastAt + CONFIG.contextReadMs - now();
+    if (wait <= 0) { void readContext(source, sessionId, r); return; }
+    const reads = r;
+    r.timer = setTimeout(() => { reads.timer = undefined; void readContext(source, sessionId, reads); }, wait);
+  }
+
+  /** Reads the transcript and, when the reading or its boundaries changed since the last one sent, applies a `context` event (not logged). */
+  async function readContext(source: string, sessionId: string, r: ContextReads): Promise<void> {
+    r.lastAt = now();
+    const info = await within(readTranscript(r.path), CONFIG.modelReadTimeoutMs, null);
+    if (closed || info === null || info.contextTokens === null) return;
+    const reading = `${info.contextTokens}|${info.boundaries.map(b => b.uuid).join(",")}`;
+    if (reading === r.sent) return;
+    r.sent = reading;
+    const ev: AgentEvent = {
+      source, sessionId, repoPath: r.repoPath, at: now(), kind: "context", contextTokens: info.contextTokens, boundaries: info.boundaries,
+    };
+    await enqueue(() => commit(world.apply(ev)));
   }
 
   function tick(): void {
@@ -158,8 +205,12 @@ export function createApp(opts: AppOptions): App {
       let raw: unknown;
       try { raw = JSON.parse(body); } catch { console.warn("agent-world: ingest body is not JSON"); return; }
       const events = adapter.parse(raw, now());
-      if (events.length === 0) { console.warn(`agent-world: ingest payload from "${source}" not recognized`); return; }
+      // any payload naming its transcript (PreCompact and PostCompact produce no event) prompts a context read
+      const readTrigger = isRecord(raw) && nonEmpty(raw.session_id) && nonEmpty(raw.transcript_path)
+        ? { sessionId: raw.session_id, path: raw.transcript_path, repoPath: typeof raw.cwd === "string" ? raw.cwd : "" } : null;
+      if (events.length === 0 && readTrigger === null) { console.warn(`agent-world: ingest payload from "${source}" not recognized`); return; }
       await Promise.all(events.map(inject));
+      if (readTrigger !== null) scheduleContextRead(source, readTrigger.sessionId, readTrigger.path, readTrigger.repoPath);
     } finally {
       sendStatus(res, 204);
     }
@@ -272,6 +323,8 @@ export function createApp(opts: AppOptions): App {
   }
 
   function close(): void {
+    closed = true;
+    for (const key of [...contextReads.keys()]) forgetContextReads(key);
     for (const s of streams) s.end();
     streams.clear();
   }

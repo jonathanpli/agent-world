@@ -7,12 +7,8 @@ import { CONFIG } from "../../src/shared/config";
 import { createWorld } from "../../src/core/world";
 import { MIGRATIONS } from "../../src/server/migrations";
 import { openStore } from "../../src/server/store";
-import type { Session, Snapshot } from "../../src/shared/types";
 import { deps, ev, newWorld } from "../helpers/events";
 
-/** Sessions as the store reads them back: sidekicks, the last tool and context are not stored yet. */
-const unstored = (ss: Session[]): Session[] => ss.map(s => ({ ...s, sidekicks: [], lastTool: null, context: null }));
-const reloaded = (snap: Snapshot): Snapshot => ({ ...snap, sessions: unstored(snap.sessions) });
 
 test("round trip through a real world (Review Focus 4)", () => {
   const dir = mkdtempSync(join(tmpdir(), "aw-")); const path = join(dir, "sub", "w.db");
@@ -27,7 +23,7 @@ test("round trip through a real world (Review Focus 4)", () => {
   store.close();
   store = openStore(path); const after = createWorld(store.load(), deps()).snapshot(0, false);
   store.close();
-  expect(after).toEqual(reloaded(before));
+  expect(after).toEqual(before);
 });
 
 test("round trip preserves temp looks, nulls and retired flag", () => {
@@ -40,7 +36,7 @@ test("round trip preserves temp looks, nulls and retired flag", () => {
   store.persist(retire);
   const after = createWorld(store.load(), deps()).snapshot(0, false);
   expect(after.characters[0]!.retired).toBe(true);
-  expect(after.sessions).toEqual(unstored(w.snapshot(0, false).sessions));
+  expect(after.sessions).toEqual(w.snapshot(0, false).sessions);
   store.close();
 });
 
@@ -91,10 +87,57 @@ test("context settings persist; rows saved before them load with the defaults", 
   old.close();
 });
 
-test("learned_limit deltas are not stored yet; learned limits load empty", () => {
-  const store = openStore(":memory:");
-  expect(() => store.persist([{ type: "learned_limit", model: "m", limit: 180_000 }])).not.toThrow();
+test("a session's context, sidekicks and last tool round-trip", () => {
+  const dir = mkdtempSync(join(tmpdir(), "aw-")); const path = join(dir, "w.db");
+  let store = openStore(path); const w = createWorld(store.load(), deps());
+  const sub = (kind: "sub_start" | "sub_end", agentId: string, at: number) => ev(kind, { at, detail: { agentId, agentType: "Explore" } });
+  for (const e of [
+    ev("session_start", { at: 1000, model: "claude-opus-5-5" }), ev("prompt", { at: 2000, detail: { text: "go" } }),
+    sub("sub_start", "a1", 3000), sub("sub_start", "a2", 3500), sub("sub_start", "a3", 3600), sub("sub_end", "a3", 3700),
+    ev("tool", { at: 4000, failed: true, detail: { tool: "Bash", toolKind: "shell" } }),
+    ev("context", { at: 5000, contextTokens: 50_000, boundaries: [{ uuid: "u1", trigger: "manual", preTokens: 90_000, postTokens: 20_000 }] }),
+    ev("context", { at: 6000, contextTokens: 30_000, boundaries: [{ uuid: "u1", trigger: "manual", preTokens: 90_000, postTokens: 20_000 },
+      { uuid: "u2", trigger: "auto", preTokens: 150_000, postTokens: 25_000 }] }),
+  ]) store.persist(w.apply(e));
+  const before = w.snapshot(0, false);
+  expect(before.sessions[0]!.sidekicks).toHaveLength(2);
+  expect(before.sessions[0]!.lastTool).toMatchObject({ kind: "shell", failed: true });
+  expect(before.sessions[0]!.context).toMatchObject({ tokens: 30_000, compactions: 1, seen: ["u1", "u2"] });
+  store.close();
+  store = openStore(path);
+  const init = store.load();
+  store.close();
+  expect(createWorld(init, deps()).snapshot(0, false)).toEqual(before);
+  expect(init.learnedLimits).toEqual({ "claude-opus-5-5": 150_000 });
+});
+
+test("sessions saved before the extras migration load with no context, sidekicks or last tool", () => {
+  const dir = mkdtempSync(join(tmpdir(), "aw-")); const path = join(dir, "w.db");
+  const db = new DatabaseSync(path);
+  db.exec(MIGRATIONS[0]!); db.exec(MIGRATIONS[1]!); db.exec("PRAGMA user_version = 2");
+  db.exec(`INSERT INTO sessions (key, source, session_id, character_id, temp_look, repo_id, state, state_since, model, tier, effort,
+    started_at, last_event_at, task, last_summary, attention, activity) VALUES ('t:s1', 't', 's1', 'c1', NULL, 'r1', 'idle', 0, NULL, 3, NULL, 0, 0, NULL, NULL, 0, '[]')`);
+  db.close();
+  const store = openStore(path);
+  const loaded = store.load().sessions[0]!;
+  expect(loaded).toMatchObject({ key: "t:s1", context: null, sidekicks: [], lastTool: null });
+  expect(loaded.pendingStats).toEqual({ tasks: 0, tools: 0, compactions: 0, sidekicks: 0, failures: 0 });
+  store.close();
+});
+
+test("learned_limit deltas round-trip and keep the maximum per model; they are not settings", () => {
+  const dir = mkdtempSync(join(tmpdir(), "aw-")); const path = join(dir, "w.db");
+  let store = openStore(path);
   expect(store.load().learnedLimits).toEqual({});
+  store.persist([{ type: "learned_limit", model: "m", limit: 180_000 }, { type: "learned_limit", model: "n", limit: 150_000 }]);
+  store.persist([{ type: "learned_limit", model: "m", limit: 170_000 }]);
+  store.close();
+  store = openStore(path);
+  const init = store.load();
+  expect(init.learnedLimits).toEqual({ m: 180_000, n: 150_000 });
+  expect(init.settings).toEqual(CONFIG.defaultSettings);
+  store.persist(createWorld(init, deps()).updateSettings({ theme: "space" }));
+  expect(store.load().learnedLimits).toEqual({ m: 180_000, n: 150_000 });
   store.close();
 });
 
@@ -125,7 +168,7 @@ test("retiring a character with a live session persists the handover", () => {
   const id = w.snapshot(0, false).characters[0]!.id;
   store.persist(w.updateCharacter(id, { retired: true }));
   const after = createWorld(store.load(), deps()).snapshot(0, false);
-  expect(after.sessions).toEqual(unstored(w.snapshot(0, false).sessions));
+  expect(after.sessions).toEqual(w.snapshot(0, false).sessions);
   expect(after.characters).toEqual(w.snapshot(0, false).characters);
   expect(after.sessions[0]!.characterId).not.toBe(id);
   expect(after.sessions[0]!.characterId).not.toBeNull();
@@ -142,7 +185,7 @@ test("an unknown-tier session with held XP survives a restart and is credited af
   expect(before.sessions[0]).toMatchObject({ tierKnown: false, graceSince: 2000, pendingXp: CONFIG.xp.prompt + CONFIG.xp.tool, pendingStats: { tasks: 0, tools: 1 } });
   store.close();
   store = openStore(path); const w2 = createWorld(store.load(), deps());
-  expect(w2.snapshot(0, false)).toEqual(reloaded(before));
+  expect(w2.snapshot(0, false)).toEqual(before);
   store.persist(w2.apply(ev("task_done", { at: 4000, tier: 3 })));
   store.close();
   store = openStore(path); const after = store.load();

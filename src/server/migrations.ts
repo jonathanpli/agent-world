@@ -32,4 +32,9 @@ export const MIGRATIONS: string[] = [
   ALTER TABLE sessions ADD COLUMN pending_stats TEXT NOT NULL DEFAULT '{"tasks":0,"tools":0}';
   ALTER TABLE sessions ADD COLUMN grace_since INTEGER;
   `,
+  // A session's context reading, running sidekicks and last tool, as one JSON object; older rows read as none of them.
+  // (pending_stats and characters.stats are JSON already: counters a row lacks read as 0.)
+  `
+  ALTER TABLE sessions ADD COLUMN extras TEXT NOT NULL DEFAULT '{}';
+  `,
 ];

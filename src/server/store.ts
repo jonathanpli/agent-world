@@ -7,8 +7,8 @@ import type { WorldInit } from "../core/world";
 import { MIGRATIONS } from "./migrations";
 
 export type Store = {
-  load(): WorldInit;                    // settings default to CONFIG.defaultSettings when absent
-  persist(deltas: Delta[]): void;       // one transaction; `notice`, `credit` and (for now) `learned_limit` deltas are not stored
+  load(): WorldInit;                    // settings default to CONFIG.defaultSettings when absent; learned limits to {}
+  persist(deltas: Delta[]): void;       // one transaction; `notice` and (until the recap) `credit` deltas are not stored
   logEvent(ev: AgentEvent): void;
   pruneEvents(olderThan: number): void;
   eventCount(): number;
@@ -20,6 +20,9 @@ type Row = Record<string, SQLInputValue>;
 /** Counters a row stored before they existed reads as 0. */
 const NO_STATS = { tasks: 0, tools: 0, compactions: 0, sidekicks: 0 };
 const NO_PENDING = { ...NO_STATS, failures: 0 };
+/** The settings-table key that holds the learned context limits; not a setting, so never part of `Settings`. */
+const LEARNED_LIMITS_KEY = "learnedLimits";
+type Extras = Pick<Session, "context" | "sidekicks" | "lastTool">;
 
 function migrate(db: DatabaseSync): void {
   const row = db.prepare("PRAGMA user_version").get() as { user_version: number };
@@ -61,17 +64,19 @@ export function openStore(path: string): Store {
     ON CONFLICT(id) DO UPDATE SET path = excluded.path, name = excluded.name, created_at = excluded.created_at`);
   const upsertSession = db.prepare(`
     INSERT INTO sessions (key, source, session_id, character_id, temp_look, repo_id, state, state_since, model, tier, effort,
-      started_at, last_event_at, task, last_summary, attention, activity, tier_known, pending_xp, pending_stats, grace_since)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      started_at, last_event_at, task, last_summary, attention, activity, tier_known, pending_xp, pending_stats, grace_since, extras)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     ON CONFLICT(key) DO UPDATE SET source = excluded.source, session_id = excluded.session_id, character_id = excluded.character_id,
       temp_look = excluded.temp_look, repo_id = excluded.repo_id, state = excluded.state, state_since = excluded.state_since,
       model = excluded.model, tier = excluded.tier, effort = excluded.effort, started_at = excluded.started_at,
       last_event_at = excluded.last_event_at, task = excluded.task, last_summary = excluded.last_summary,
       attention = excluded.attention, activity = excluded.activity, tier_known = excluded.tier_known,
-      pending_xp = excluded.pending_xp, pending_stats = excluded.pending_stats, grace_since = excluded.grace_since`);
+      pending_xp = excluded.pending_xp, pending_stats = excluded.pending_stats, grace_since = excluded.grace_since,
+      extras = excluded.extras`);
   const deleteSession = db.prepare("DELETE FROM sessions WHERE key = ?");
   const upsertSetting = db.prepare(`
     INSERT INTO settings (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value`);
+  const getSetting = db.prepare("SELECT value FROM settings WHERE key = ?");
   const insertEvent = db.prepare("INSERT INTO events (at, source, session_id, repo_path, kind, payload) VALUES (?, ?, ?, ?, ?, ?)");
   const deleteEventsBefore = db.prepare("DELETE FROM events WHERE at < ?");
   const countEvents = db.prepare("SELECT COUNT(*) AS n FROM events");
@@ -89,11 +94,25 @@ export function openStore(path: string): Store {
       s.key, s.source, s.sessionId, s.characterId, s.tempLook === null ? null : JSON.stringify(s.tempLook), s.repoId, s.state, s.stateSince,
       s.model, s.tier, s.effort, s.startedAt, s.lastEventAt, s.task, s.lastSummary, s.attention ? 1 : 0, JSON.stringify(s.activity),
       s.tierKnown ? 1 : 0, s.pendingXp, JSON.stringify(s.pendingStats), s.graceSince,
+      JSON.stringify({ context: s.context, sidekicks: s.sidekicks, lastTool: s.lastTool } satisfies Extras),
     );
   }
 
   function saveSettings(settings: Settings): void {
     for (const [k, v] of Object.entries(settings)) upsertSetting.run(k, JSON.stringify(v));
+  }
+
+  function learnedLimits(): Record<string, number> {
+    const row = getSetting.get(LEARNED_LIMITS_KEY) as { value: string } | undefined;
+    return row === undefined ? {} : JSON.parse(row.value);
+  }
+
+  /** Keeps the larger of the stored and the new limit for the model. */
+  function saveLearnedLimit(model: string, limit: number): void {
+    const limits = learnedLimits();
+    if ((limits[model] ?? 0) >= limit) return;
+    limits[model] = limit;
+    upsertSetting.run(LEARNED_LIMITS_KEY, JSON.stringify(limits));
   }
 
   function load(): WorldInit {
@@ -119,20 +138,25 @@ export function openStore(path: string): Store {
     const repos = (db.prepare("SELECT * FROM repos ORDER BY rowid").all() as Row[]).map((r): Repo => ({
       id: r.id as string, path: r.path as string, name: r.name as string, createdAt: r.created_at as number,
     }));
-    const sessions = (db.prepare("SELECT * FROM sessions ORDER BY rowid").all() as Row[]).map((r): Session => ({
-      key: r.key as string, source: r.source as string, sessionId: r.session_id as string,
-      characterId: r.character_id as string | null, tempLook: r.temp_look === null ? null : JSON.parse(r.temp_look as string),
-      repoId: r.repo_id as string, state: r.state as Session["state"], stateSince: r.state_since as number,
-      model: r.model as string | null, tier: r.tier as Session["tier"], effort: r.effort as Session["effort"],
-      tierKnown: r.tier_known === 1, pendingXp: r.pending_xp as number, pendingStats: { ...NO_PENDING, ...JSON.parse(r.pending_stats as string) },
-      graceSince: r.grace_since as number | null,
-      startedAt: r.started_at as number, lastEventAt: r.last_event_at as number, task: r.task as string | null,
-      lastSummary: r.last_summary as string | null, attention: r.attention === 1, activity: JSON.parse(r.activity as string),
-      sidekicks: [], lastTool: null, context: null,   // not stored yet
-    }));
+    const sessions = (db.prepare("SELECT * FROM sessions ORDER BY rowid").all() as Row[]).map((r): Session => {
+      const extras: Partial<Extras> = JSON.parse(r.extras as string);
+      return {
+        key: r.key as string, source: r.source as string, sessionId: r.session_id as string,
+        characterId: r.character_id as string | null, tempLook: r.temp_look === null ? null : JSON.parse(r.temp_look as string),
+        repoId: r.repo_id as string, state: r.state as Session["state"], stateSince: r.state_since as number,
+        model: r.model as string | null, tier: r.tier as Session["tier"], effort: r.effort as Session["effort"],
+        tierKnown: r.tier_known === 1, pendingXp: r.pending_xp as number, pendingStats: { ...NO_PENDING, ...JSON.parse(r.pending_stats as string) },
+        graceSince: r.grace_since as number | null,
+        startedAt: r.started_at as number, lastEventAt: r.last_event_at as number, task: r.task as string | null,
+        lastSummary: r.last_summary as string | null, attention: r.attention === 1, activity: JSON.parse(r.activity as string),
+        context: extras.context ?? null, sidekicks: extras.sidekicks ?? [], lastTool: extras.lastTool ?? null,
+      };
+    });
     const settings: Record<string, unknown> = { ...CONFIG.defaultSettings };
-    for (const r of db.prepare("SELECT key, value FROM settings").all() as Row[]) settings[r.key as string] = JSON.parse(r.value as string);
-    return { characters, repos, sessions, settings: settings as Settings, learnedLimits: {} };   // learned limits: not stored yet
+    for (const r of db.prepare("SELECT key, value FROM settings").all() as Row[]) {
+      if (r.key !== LEARNED_LIMITS_KEY) settings[r.key as string] = JSON.parse(r.value as string);
+    }
+    return { characters, repos, sessions, settings: settings as Settings, learnedLimits: learnedLimits() };
   }
 
   function persist(deltas: Delta[]): void {
@@ -146,8 +170,8 @@ export function openStore(path: string): Store {
           case "session_removed": deleteSession.run(d.key); break;
           case "settings": saveSettings(d.settings); break;
           case "notice": break;
-          case "credit": break;
-          case "learned_limit": break;   // not stored yet
+          case "credit": break;   // not stored until the recap table exists
+          case "learned_limit": saveLearnedLimit(d.model, d.limit); break;
         }
       }
       db.exec("COMMIT");
