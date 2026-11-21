@@ -8,7 +8,7 @@ import { MIGRATIONS } from "./migrations";
 
 export type Store = {
   load(): WorldInit;                    // settings default to CONFIG.defaultSettings when absent
-  persist(deltas: Delta[]): void;       // one transaction; `notice` deltas are not stored
+  persist(deltas: Delta[]): void;       // one transaction; `notice` and `credit` deltas are not stored
   logEvent(ev: AgentEvent): void;
   pruneEvents(olderThan: number): void;
   eventCount(): number;
@@ -16,6 +16,9 @@ export type Store = {
 };
 
 type Row = Record<string, SQLInputValue>;
+
+/** Counters a row stored before they existed reads as 0. */
+const NO_STATS = { tasks: 0, tools: 0, compactions: 0, sidekicks: 0 };
 
 function migrate(db: DatabaseSync): void {
   const row = db.prepare("PRAGMA user_version").get() as { user_version: number };
@@ -110,7 +113,7 @@ export function openStore(path: string): Store {
     const characters = (db.prepare("SELECT * FROM characters ORDER BY rowid").all() as Row[]).map((r): Character => ({
       id: r.id as string, name: r.name as string, tier: r.tier as Character["tier"], look: JSON.parse(r.look as string),
       xp: r.xp as number, createdAt: r.created_at as number, lastActiveAt: r.last_active_at as number, retired: r.retired === 1,
-      repoXp: repoXp.get(r.id as string) ?? {}, stats: JSON.parse(r.stats as string), achievements: achievements.get(r.id as string) ?? {},
+      repoXp: repoXp.get(r.id as string) ?? {}, stats: { ...NO_STATS, ...JSON.parse(r.stats as string) }, achievements: achievements.get(r.id as string) ?? {},
     }));
     const repos = (db.prepare("SELECT * FROM repos ORDER BY rowid").all() as Row[]).map((r): Repo => ({
       id: r.id as string, path: r.path as string, name: r.name as string, createdAt: r.created_at as number,
@@ -120,10 +123,11 @@ export function openStore(path: string): Store {
       characterId: r.character_id as string | null, tempLook: r.temp_look === null ? null : JSON.parse(r.temp_look as string),
       repoId: r.repo_id as string, state: r.state as Session["state"], stateSince: r.state_since as number,
       model: r.model as string | null, tier: r.tier as Session["tier"], effort: r.effort as Session["effort"],
-      tierKnown: r.tier_known === 1, pendingXp: r.pending_xp as number, pendingStats: JSON.parse(r.pending_stats as string),
+      tierKnown: r.tier_known === 1, pendingXp: r.pending_xp as number, pendingStats: { ...NO_STATS, ...JSON.parse(r.pending_stats as string) },
       graceSince: r.grace_since as number | null,
       startedAt: r.started_at as number, lastEventAt: r.last_event_at as number, task: r.task as string | null,
       lastSummary: r.last_summary as string | null, attention: r.attention === 1, activity: JSON.parse(r.activity as string),
+      sidekicks: [], lastTool: null,   // not stored yet
     }));
     const settings: Record<string, unknown> = { ...CONFIG.defaultSettings };
     for (const r of db.prepare("SELECT key, value FROM settings").all() as Row[]) settings[r.key as string] = JSON.parse(r.value as string);
@@ -141,6 +145,7 @@ export function openStore(path: string): Store {
           case "session_removed": deleteSession.run(d.key); break;
           case "settings": saveSettings(d.settings); break;
           case "notice": break;
+          case "credit": break;
         }
       }
       db.exec("COMMIT");

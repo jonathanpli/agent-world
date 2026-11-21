@@ -30,6 +30,15 @@ test("character, repo and settings deltas replace their entries", () => {
   expect(s.settings.theme).toBe("space");
 });
 
+test("credit deltas change nothing on the client", () => {
+  const s = emptyState();
+  applySnapshot(s, snap({ characters: [char("a")], repos: [repo("r1")], sessions: [session("k1", "a", "r1")] }));
+  const before = structuredClone(s);
+  const out = applyDeltas(s, [{ type: "credit", at: 1, characterId: "a", repoId: "r1", tasks: 1, tools: 2, failures: 0, xp: 30, levels: 0, compactions: 0, sidekicks: 0 }]);
+  expect(out).toEqual([]);
+  expect(s).toEqual(before);
+});
+
 test("session_removed and notices", () => {
   const s = emptyState();
   applySnapshot(s, snap({ characters: [char("a")], repos: [repo("r1")], sessions: [session("k1", "a", "r1")] }));

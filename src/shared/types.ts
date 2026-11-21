@@ -17,9 +17,11 @@ export type Look = { body: string; skin: string; hairStyle: number; hairColor: s
 export type Character = {
   id: string; name: string; tier: Tier; look: Look; xp: number; createdAt: number; lastActiveAt: number;
   retired: boolean; repoXp: Record<string, number>;          // repoId → xp
-  stats: { tasks: number; tools: number }; achievements: Record<string, number>; // id → when
+  stats: { tasks: number; tools: number; compactions: number; sidekicks: number }; achievements: Record<string, number>; // id → when
 };
 export type Repo = { id: string; path: string; name: string; createdAt: number };
+export type Sidekick = { id: string; type: string; since: number; lastAt: number };
+export type LastTool = { kind: ToolKind; at: number; failed: boolean; agentId: string | null };
 export type ActivityLine = { at: number; kind: EventKind; text: string };
 export type Session = {
   key: string;                       // `${source}:${sessionId}`
@@ -30,9 +32,12 @@ export type Session = {
   model: string | null; tier: Tier; effort: Effort | null;
   tierKnown: boolean;                // false until an event carries a tier or the grace period ends; unbound until then
   graceSince: number | null;         // when the grace clock started: the first prompt (or first event if seen mid-session)
-  pendingXp: number; pendingStats: { tasks: number; tools: number };   // earned while the tier is unknown, credited on binding
+  pendingXp: number;                 // earned while the tier is unknown, credited on binding
+  pendingStats: { tasks: number; tools: number; compactions: number; sidekicks: number };
   startedAt: number; lastEventAt: number; task: string | null; lastSummary: string | null;
   attention: boolean; activity: ActivityLine[];
+  sidekicks: Sidekick[];             // running subagents, oldest first
+  lastTool: LastTool | null;         // the most recent tool event, successful or failed
 };
 export type Settings = { theme: string; notifyNeedsInput: boolean; notifyDone: boolean; sound: boolean; rosterCap: number };
 export type NoticeKind = "needs_input" | "done" | "level_up" | "achievement";
@@ -43,5 +48,8 @@ export type Delta =
   | { type: "session"; session: Session }
   | { type: "session_removed"; key: string }
   | { type: "settings"; settings: Settings }
-  | { type: "notice"; notice: Notice };
+  | { type: "notice"; notice: Notice }
+  /** What one call credited, at the moment it was credited (held "Arriving" XP lands in the binding call). */
+  | { type: "credit"; at: number; characterId: string | null; repoId: string;      // null = temp
+      tasks: number; tools: number; failures: number; xp: number; levels: number; compactions: number; sidekicks: number };
 export type Snapshot = { serverTime: number; demo: boolean; characters: Character[]; repos: Repo[]; sessions: Session[]; settings: Settings };

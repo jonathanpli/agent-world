@@ -5,18 +5,18 @@ import { xpForLevel } from "../../src/core/levels";
 
 const char = (over: Partial<Character> = {}): Character => ({
   id: "c", name: "Ada", tier: 2, look: {} as Character["look"], xp: 0, createdAt: 0, lastActiveAt: 0,
-  retired: false, repoXp: {}, stats: { tasks: 0, tools: 0 }, achievements: {}, ...over,
+  retired: false, repoXp: {}, stats: { tasks: 0, tools: 0, compactions: 0, sidekicks: 0 }, achievements: {}, ...over,
 });
 const session = (startedAt = 0) => ({ startedAt } as Session);
 const noon = new Date(2026, 0, 1, 12).getTime();
 const ctx = (over: Partial<Parameters<typeof earned>[1]> = {}) => ({ at: noon, session: session(noon), levelBefore: 1, ...over });
 
-test("the ten achievements", () => {
-  expect(ACHIEVEMENTS.map(a => a.id).sort()).toEqual(["early_bird", "first_task", "legend", "level_10", "level_25", "marathon", "night_owl", "repos_5", "tasks_100", "tools_1000"]);
+test("the eleven achievements", () => {
+  expect(ACHIEVEMENTS.map(a => a.id).sort()).toEqual(["delegator", "early_bird", "first_task", "legend", "level_10", "level_25", "marathon", "night_owl", "repos_5", "tasks_100", "tools_1000"]);
 });
 
 test("first_task once only", () => {
-  const c = char({ stats: { tasks: 1, tools: 0 } });
+  const c = char({ stats: { tasks: 1, tools: 0, compactions: 0, sidekicks: 0 } });
   expect(earned(c, ctx())).toEqual(["first_task"]);
   c.achievements.first_task = noon;
   expect(earned(c, ctx())).toEqual([]);
@@ -65,6 +65,13 @@ test("level_10 and level_25", () => {
 });
 
 test("tasks_100 and tools_1000", () => {
-  expect(earned(char({ stats: { tasks: 100, tools: 1000 } }), ctx())).toEqual(expect.arrayContaining(["tasks_100", "tools_1000"]));
-  expect(earned(char({ stats: { tasks: 99, tools: 999 } }), ctx())).not.toEqual(expect.arrayContaining(["tasks_100"]));
+  expect(earned(char({ stats: { tasks: 100, tools: 1000, compactions: 0, sidekicks: 0 } }), ctx())).toEqual(expect.arrayContaining(["tasks_100", "tools_1000"]));
+  expect(earned(char({ stats: { tasks: 99, tools: 999, compactions: 0, sidekicks: 0 } }), ctx())).not.toEqual(expect.arrayContaining(["tasks_100"]));
+});
+
+test("delegator at 25 finished sidekicks", () => {
+  const stats = (sidekicks: number) => ({ tasks: 0, tools: 0, compactions: 0, sidekicks });
+  expect(earned(char({ stats: stats(25) }), ctx({ finishedTask: false }))).toContain("delegator");
+  expect(earned(char({ stats: stats(24) }), ctx({ finishedTask: false }))).not.toContain("delegator");
+  expect(ACHIEVEMENTS.find(a => a.id === "delegator")).toEqual({ id: "delegator", title: "Delegator", description: "25 sidekicks finished" });
 });

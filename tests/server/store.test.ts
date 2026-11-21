@@ -7,7 +7,12 @@ import { CONFIG } from "../../src/shared/config";
 import { createWorld } from "../../src/core/world";
 import { MIGRATIONS } from "../../src/server/migrations";
 import { openStore } from "../../src/server/store";
+import type { Session, Snapshot } from "../../src/shared/types";
 import { deps, ev, newWorld } from "../helpers/events";
+
+/** Sessions as the store reads them back: sidekicks and the last tool are not stored yet. */
+const unstored = (ss: Session[]): Session[] => ss.map(s => ({ ...s, sidekicks: [], lastTool: null }));
+const reloaded = (snap: Snapshot): Snapshot => ({ ...snap, sessions: unstored(snap.sessions) });
 
 test("round trip through a real world (Review Focus 4)", () => {
   const dir = mkdtempSync(join(tmpdir(), "aw-")); const path = join(dir, "sub", "w.db");
@@ -22,7 +27,7 @@ test("round trip through a real world (Review Focus 4)", () => {
   store.close();
   store = openStore(path); const after = createWorld(store.load(), deps()).snapshot(0, false);
   store.close();
-  expect(after).toEqual(before);
+  expect(after).toEqual(reloaded(before));
 });
 
 test("round trip preserves temp looks, nulls and retired flag", () => {
@@ -35,7 +40,7 @@ test("round trip preserves temp looks, nulls and retired flag", () => {
   store.persist(retire);
   const after = createWorld(store.load(), deps()).snapshot(0, false);
   expect(after.characters[0]!.retired).toBe(true);
-  expect(after.sessions).toEqual(w.snapshot(0, false).sessions);
+  expect(after.sessions).toEqual(unstored(w.snapshot(0, false).sessions));
   store.close();
 });
 
@@ -92,7 +97,7 @@ test("retiring a character with a live session persists the handover", () => {
   const id = w.snapshot(0, false).characters[0]!.id;
   store.persist(w.updateCharacter(id, { retired: true }));
   const after = createWorld(store.load(), deps()).snapshot(0, false);
-  expect(after.sessions).toEqual(w.snapshot(0, false).sessions);
+  expect(after.sessions).toEqual(unstored(w.snapshot(0, false).sessions));
   expect(after.characters).toEqual(w.snapshot(0, false).characters);
   expect(after.sessions[0]!.characterId).not.toBe(id);
   expect(after.sessions[0]!.characterId).not.toBeNull();
@@ -109,7 +114,7 @@ test("an unknown-tier session with held XP survives a restart and is credited af
   expect(before.sessions[0]).toMatchObject({ tierKnown: false, graceSince: 2000, pendingXp: CONFIG.xp.prompt + CONFIG.xp.tool, pendingStats: { tasks: 0, tools: 1 } });
   store.close();
   store = openStore(path); const w2 = createWorld(store.load(), deps());
-  expect(w2.snapshot(0, false)).toEqual(before);
+  expect(w2.snapshot(0, false)).toEqual(reloaded(before));
   store.persist(w2.apply(ev("task_done", { at: 4000, tier: 3 })));
   store.close();
   store = openStore(path); const after = store.load();
@@ -130,7 +135,30 @@ test("sessions saved before the arriving migration load as known with nothing he
     started_at, last_event_at, task, last_summary, attention, activity) VALUES ('t:s1', 't', 's1', 'c1', NULL, 'r1', 'idle', 0, NULL, 3, NULL, 0, 0, NULL, NULL, 0, '[]')`);
   db.close();
   const store = openStore(path);
-  expect(store.load().sessions[0]).toMatchObject({ key: "t:s1", tier: 3, tierKnown: true, pendingXp: 0, pendingStats: { tasks: 0, tools: 0 }, graceSince: null });
+  const loaded = store.load().sessions[0]!;
+  expect(loaded).toMatchObject({ key: "t:s1", tier: 3, tierKnown: true, pendingXp: 0, graceSince: null, sidekicks: [], lastTool: null });
+  expect(loaded.pendingStats).toEqual({ tasks: 0, tools: 0, compactions: 0, sidekicks: 0 });
+  store.close();
+});
+
+test("characters stored before the compaction and sidekick counters load them as 0", () => {
+  const dir = mkdtempSync(join(tmpdir(), "aw-")); const path = join(dir, "w.db");
+  let store = openStore(path); const w = createWorld(store.load(), deps());
+  store.persist(w.apply(ev("session_start")));
+  store.close();
+  const db = new DatabaseSync(path);
+  db.exec(`UPDATE characters SET stats = '{"tasks":3,"tools":7}'`);
+  db.close();
+  store = openStore(path);
+  expect(store.load().characters[0]!.stats).toEqual({ tasks: 3, tools: 7, compactions: 0, sidekicks: 0 });
+  store.close();
+});
+
+test("persist ignores credit deltas", () => {
+  const store = openStore(":memory:");
+  const credit = { type: "credit" as const, at: 0, characterId: null, repoId: "r", tasks: 1, tools: 0, failures: 0, xp: 0, levels: 0, compactions: 0, sidekicks: 0 };
+  expect(() => store.persist([credit])).not.toThrow();
+  expect(store.load()).toMatchObject({ characters: [], repos: [], sessions: [] });
   store.close();
 });
 

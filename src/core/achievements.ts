@@ -15,6 +15,7 @@ export const ACHIEVEMENTS: AchievementDef[] = [
   { id: "night_owl", title: "Night Owl", description: "Finish a task between midnight and 5am." },
   { id: "early_bird", title: "Early Bird", description: "Finish a task between 5am and 7am." },
   { id: "marathon", title: "Marathon", description: "Finish a task in a session over 4 hours old." },
+  { id: "delegator", title: "Delegator", description: `${CONFIG.achievements.sidekicksMany} sidekicks finished` },
 ];
 
 type Ctx = {
@@ -43,6 +44,7 @@ export function earned(c: Character, ctx: Ctx): string[] {
     night_owl: task && within(hour, A.nightHours),
     early_bird: task && within(hour, A.earlyHours),
     marathon: task && ctx.at - ctx.session.startedAt >= A.marathonMs,
+    delegator: c.stats.sidekicks >= A.sidekicksMany,
   };
   return ACHIEVEMENTS.filter(a => met[a.id] && c.achievements[a.id] === undefined).map(a => a.id);
 }

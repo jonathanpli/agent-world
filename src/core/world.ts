@@ -1,6 +1,6 @@
 import { CONFIG } from "../shared/config";
 import { isValidLook } from "../shared/cosmetics";
-import type { AgentEvent, Character, Delta, Look, Notice, Repo, Session, Settings, Snapshot, Tier } from "../shared/types";
+import type { AgentEvent, Character, Delta, Look, Notice, Repo, Session, Settings, Snapshot, Tier, ToolKind } from "../shared/types";
 import { pickCharacter } from "./assign";
 import { earned, ACHIEVEMENTS } from "./achievements";
 import { levelForXp } from "./levels";
@@ -22,6 +22,9 @@ const TEMP_NAME = "Temp";
 /** How notices name a session that is still waiting for its tier (and so has no character yet). */
 export const ARRIVAL_NAME = "A new arrival";
 const clone = <T>(x: T): T => structuredClone(x);
+const emptyStats = (): Session["pendingStats"] => ({ tasks: 0, tools: 0, compactions: 0, sidekicks: 0 });
+const TOOL_KINDS: ReadonlySet<string> = new Set<ToolKind>(["edit", "shell", "read", "web", "delegate", "other"]);
+const toolKind = (k: string | undefined): ToolKind => (k !== undefined && TOOL_KINDS.has(k) ? k as ToolKind : "other");
 
 export function createWorld(init: WorldInit, deps: WorldDeps): World {
   const characters = new Map(init.characters.map(c => [c.id, clone(c)]));
@@ -32,6 +35,8 @@ export function createWorld(init: WorldInit, deps: WorldDeps): World {
   const lastNoticeAt = new Map<string, number>();
   /** sessionKey → current tool-XP minute window. Private, never in snapshots. */
   const toolWindow = new Map<string, { start: number; earned: number }>();
+  /** sessionKey → failed tools not yet credited (held while the tier is unknown). Private, never in snapshots. */
+  const pendingFailures = new Map<string, number>();
 
   const characterDelta = (c: Character): Delta => ({ type: "character", character: clone(c) });
   const sessionDelta = (s: Session): Delta => ({ type: "session", session: clone(s) });
@@ -61,7 +66,7 @@ export function createWorld(init: WorldInit, deps: WorldDeps): World {
         c = {
           id: deps.newId(), name: randomName(deps.rng, taken), tier: session.tier, look: randomLook(deps.rng),
           xp: 0, createdAt: at, lastActiveAt: at, retired: false, repoXp: {},
-          stats: { tasks: 0, tools: 0 }, achievements: {},
+          stats: emptyStats(), achievements: {},
         };
         characters.set(c.id, c);
         out.push(characterDelta(c));
@@ -84,8 +89,9 @@ export function createWorld(init: WorldInit, deps: WorldDeps): World {
       effort: ev.effort ?? null, tierKnown: ev.tier !== undefined,
       // the grace clock starts at the first prompt; a session first seen mid-way (not at its start) starts it now
       graceSince: ev.tier === undefined && ev.kind !== "session_start" ? ev.at : null,
-      pendingXp: 0, pendingStats: { tasks: 0, tools: 0 },
+      pendingXp: 0, pendingStats: emptyStats(),
       startedAt: ev.at, lastEventAt: ev.at, task: null, lastSummary: null, attention: false, activity: [],
+      sidekicks: [], lastTool: null,
     };
     sessions.set(key, session);
     if (session.tierKnown) assign(session, ev.at, out);
@@ -93,12 +99,14 @@ export function createWorld(init: WorldInit, deps: WorldDeps): World {
     return session;
   }
 
-  /** Ends the wait for a tier: binds the session at `tier`. The held XP is credited by the next `settle`, or dropped for a temp. */
+  /**
+   * Ends the wait for a tier: binds the session at `tier`. The held XP and counters are credited by the next `settle`;
+   * for a temp that credit carries the counters only.
+   */
   function bindArrival(s: Session, tier: Tier, at: number, out: Delta[]): void {
     s.tierKnown = true;
     s.tier = tier;
     assign(s, at, out);
-    if (s.characterId === null) { s.pendingXp = 0; s.pendingStats = { tasks: 0, tools: 0 }; }
   }
 
   /**
@@ -106,7 +114,7 @@ export function createWorld(init: WorldInit, deps: WorldDeps): World {
    * default tier and credited first, so nothing is lost; one that earned nothing just leaves, adding no character.
    */
   function endSession(s: Session, at: number, out: Delta[]): void {
-    const held = s.pendingXp > 0 || s.pendingStats.tasks > 0 || s.pendingStats.tools > 0;
+    const held = s.pendingXp > 0 || Object.values(s.pendingStats).some(n => n > 0);
     if (!s.tierKnown && held) {
       bindArrival(s, s.tier, at, out);
       const c = s.characterId === null ? undefined : characters.get(s.characterId);
@@ -114,6 +122,13 @@ export function createWorld(init: WorldInit, deps: WorldDeps): World {
       if (c !== undefined) out.push(characterDelta(c));
     }
     out.push(removeSession(s.key));
+  }
+
+  /** Adds the sidekick `id`, or refreshes its `lastAt` if it is already there (its type and start stay as they were). */
+  function touchSidekick(s: Session, id: string, type: string, at: number): void {
+    const k = s.sidekicks.find(x => x.id === id);
+    if (k === undefined) s.sidekicks.push({ id, type, since: at, lastAt: at });
+    else k.lastAt = at;
   }
 
   function setState(s: Session, state: Session["state"], at: number): void {
@@ -137,41 +152,60 @@ export function createWorld(init: WorldInit, deps: WorldDeps): World {
     lastNoticeAt.delete(`${key}|needs_input`);
     lastNoticeAt.delete(`${key}|done`);
     toolWindow.delete(key);
+    pendingFailures.delete(key);
     return { type: "session_removed", key };
   }
 
   /**
-   * Adds what `ev` earns to the session's held XP and stats, then settles them. A session still waiting for its tier
-   * holds what it earns; a temp earns nothing. Returns notices only; apply emits the character delta.
+   * Adds what `ev` earns to the session's held XP and counters, then settles them. A session still waiting for its
+   * tier holds what it earns; a temp earns no XP but its counters are still credited. A failed tool earns nothing and
+   * counts as a failure. Returns credit and notices only; apply emits the character delta.
    */
   function award(session: Session, ev: AgentEvent): Delta[] {
-    if (session.tierKnown && session.characterId === null) return [];
-    if (ev.kind === "tool") {
+    const temp = session.tierKnown && session.characterId === null;
+    if (ev.kind === "tool" && ev.failed === true) {
+      pendingFailures.set(session.key, (pendingFailures.get(session.key) ?? 0) + 1);
+    } else if (ev.kind === "tool") {
       session.pendingStats.tools++;
-      let w = toolWindow.get(session.key);
-      if (w === undefined || ev.at - w.start >= CONFIG.toolWindowMs) { w = { start: ev.at, earned: 0 }; toolWindow.set(session.key, w); }
-      const gain = Math.min(CONFIG.xp.tool, CONFIG.xp.toolCapPerMinute - w.earned);
-      w.earned += gain;
-      session.pendingXp += gain;
-    } else if (ev.kind === "prompt") session.pendingXp += CONFIG.xp.prompt;
-    else if (ev.kind === "task_done" && ev.repeat !== true) { session.pendingXp += CONFIG.xp.taskDone; session.pendingStats.tasks++; }
+      if (!temp) {
+        let w = toolWindow.get(session.key);
+        if (w === undefined || ev.at - w.start >= CONFIG.toolWindowMs) { w = { start: ev.at, earned: 0 }; toolWindow.set(session.key, w); }
+        const gain = Math.min(CONFIG.xp.tool, CONFIG.xp.toolCapPerMinute - w.earned);
+        w.earned += gain;
+        session.pendingXp += gain;
+      }
+    } else if (ev.kind === "prompt" && !temp) session.pendingXp += CONFIG.xp.prompt;
+    else if (ev.kind === "task_done" && ev.repeat !== true) {
+      if (!temp) session.pendingXp += CONFIG.xp.taskDone;
+      session.pendingStats.tasks++;
+    }
     return settle(session, ev.at, ev.kind === "task_done" && ev.repeat !== true);
   }
 
   /**
-   * Credits the session's held XP and stats to its character with level-ups and achievements, through the one path
-   * every award takes. Held while the tier is unknown; dropped for a temp. Returns notices only.
+   * Credits the session's held XP and counters to its character with level-ups and achievements, through the one path
+   * every award takes, and reports it as one `credit` delta. Held while the tier is unknown. A temp's credit carries
+   * its counters with no XP (held XP is dropped). Returns the credit and notices only.
    */
   function settle(session: Session, at: number, finishedTask: boolean): Delta[] {
     if (!session.tierKnown) return [];
-    const gain = session.pendingXp, stats = session.pendingStats;
-    if (gain === 0 && stats.tasks === 0 && stats.tools === 0) return [];
+    const gain = session.pendingXp, stats = session.pendingStats, failures = pendingFailures.get(session.key) ?? 0;
     session.pendingXp = 0;
-    session.pendingStats = { tasks: 0, tools: 0 };
+    session.pendingStats = emptyStats();
+    pendingFailures.delete(session.key);
     const c = session.characterId === null ? undefined : characters.get(session.characterId);
-    if (c === undefined) return [];
+    const credit = {
+      type: "credit" as const, at, characterId: c?.id ?? null, repoId: session.repoId,
+      tasks: stats.tasks, tools: stats.tools, failures, xp: c === undefined ? 0 : gain, levels: 0,
+      compactions: stats.compactions, sidekicks: stats.sidekicks,
+    };
+    const counted = credit.xp > 0 || failures > 0 || Object.values(stats).some(n => n > 0);
+    if (!counted) return [];
+    if (c === undefined) return [credit];
     c.stats.tools += stats.tools;
     c.stats.tasks += stats.tasks;
+    c.stats.compactions += stats.compactions;
+    c.stats.sidekicks += stats.sidekicks;
 
     const levelBefore = levelForXp(c.xp);
     c.xp += gain;
@@ -179,11 +213,12 @@ export function createWorld(init: WorldInit, deps: WorldDeps): World {
     c.lastActiveAt = at;
 
     const repoName = repos.get(session.repoId)?.name ?? null;
-    const out: Delta[] = [];
+    const out: Delta[] = [credit];
     const push = (kind: "level_up" | "achievement", text: string): void => {
       out.push({ type: "notice", notice: { id: deps.newId(), at, kind, sessionKey: session.key, characterId: c.id, characterName: c.name, repoName, text } });
     };
     const levelAfter = levelForXp(c.xp);
+    credit.levels = levelAfter - levelBefore;
     if (levelAfter > levelBefore) push("level_up", `${c.name} reached level ${levelAfter}`);
     for (const id of earned(c, { at, session, levelBefore, finishedTask })) {
       c.achievements[id] = at;
@@ -202,6 +237,11 @@ export function createWorld(init: WorldInit, deps: WorldDeps): World {
       endSession(s, ev.at, out);
       return out;
     }
+
+    const agentId = ev.kind === "tool" && ev.detail?.agentId ? ev.detail.agentId : null;
+    // these never create a session: for an unknown one they do nothing
+    if (s === undefined && (ev.kind === "sub_start" || ev.kind === "sub_end" || ev.kind === "context" || agentId !== null)) return [];
+    if (ev.kind === "context") return [];
 
     const out: Delta[] = [];
     const repo = repoFor(ev.repoPath, ev.at, out);
@@ -229,7 +269,19 @@ export function createWorld(init: WorldInit, deps: WorldDeps): World {
     switch (ev.kind) {
       case "session_start": break;     // a new session starts idle; compact or resume of a live one keeps its state
       case "prompt": setState(s, "working", ev.at); s.attention = false; s.task = ev.detail?.text ?? null; break;
-      case "tool": setState(s, "working", ev.at); s.attention = false; break;
+      case "tool":
+        setState(s, "working", ev.at); s.attention = false;
+        if (agentId !== null) touchSidekick(s, agentId, ev.detail?.agentType || "agent", ev.at);
+        s.lastTool = { kind: toolKind(ev.detail?.toolKind), at: ev.at, failed: ev.failed === true, agentId };
+        break;
+      case "sub_start":
+        if (ev.detail?.agentId) touchSidekick(s, ev.detail.agentId, ev.detail.agentType || "agent", ev.at);
+        break;
+      case "sub_end": {
+        const i = s.sidekicks.findIndex(k => k.id === ev.detail?.agentId);
+        if (i >= 0) { s.sidekicks.splice(i, 1); s.pendingStats.sidekicks++; }
+        break;
+      }
       case "needs_input":
         if (idleNudge) break;
         setState(s, "needs_input", ev.at); s.attention = true; notices.push(...notice(s, "needs_input", ev.at, repo));
@@ -243,8 +295,9 @@ export function createWorld(init: WorldInit, deps: WorldDeps): World {
         break;
       case "model_change": break;
     }
-    if (ev.kind !== "session_start") {
-      const text = ev.detail?.summary ?? ev.detail?.text ?? ev.detail?.reason ?? ev.kind;
+    if (ev.kind !== "session_start" && ev.kind !== "sub_start" && ev.kind !== "sub_end") {
+      const base = ev.detail?.summary ?? ev.detail?.text ?? ev.detail?.reason ?? ev.kind;
+      const text = ev.kind === "tool" && ev.failed === true ? `Failed: ${base}` : base;
       s.activity.push({ at: ev.at, kind: ev.kind, text });
       if (s.activity.length > CONFIG.activityMax) s.activity.splice(0, s.activity.length - CONFIG.activityMax);
     }
@@ -260,11 +313,16 @@ export function createWorld(init: WorldInit, deps: WorldDeps): World {
   function tick(now: number): Delta[] {
     const out: Delta[] = [];
     for (const s of [...sessions.values()]) {
-      if (now - s.lastEventAt >= CONFIG.sessionStaleMs) endSession(s, now, out);
-      else if (s.state === "done" && now - s.stateSince >= CONFIG.doneToIdleMs) {
+      if (now - s.lastEventAt >= CONFIG.sessionStaleMs) { endSession(s, now, out); continue; }
+      let changed = false;
+      if (s.state === "done" && now - s.stateSince >= CONFIG.doneToIdleMs) {
         setState(s, "idle", s.stateSince + CONFIG.doneToIdleMs);
-        out.push(sessionDelta(s));
+        changed = true;
       }
+      // a missed SubagentStop: drop the sidekick without counting it
+      const fresh = s.sidekicks.filter(k => now - k.lastAt <= CONFIG.sidekickStaleMs);
+      if (fresh.length !== s.sidekicks.length) { s.sidekicks = fresh; changed = true; }
+      if (changed) out.push(sessionDelta(s));
     }
     return out;
   }
