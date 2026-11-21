@@ -1,0 +1,10 @@
+{
+  "session_id": "11111111-2222-4333-8444-555555555555",
+  "transcript_path": "/Users/test/.claude/projects/-Users-test-repo/11111111-2222-4333-8444-555555555555.jsonl",
+  "cwd": "/Users/test/repo",
+  "permission_mode": "default",
+  "hook_event_name": "Notification",
+  "message": "Claude needs your permission to use Bash",
+  "title": "Permission needed",
+  "notification_type": "permission_prompt"
+}
