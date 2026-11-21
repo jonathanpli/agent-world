@@ -72,6 +72,7 @@ export function mount(root: HTMLElement, deps: InspectorDeps): { render(explicit
   let tab: Tab = "now";
   let draft: Look | null = null;               // unsaved look edits for the current character
   let confirmRetire = false;
+  let confirmDismiss = false;
   let renaming = false;
   let bodyKey = "";                            // what the body was last built from; rebuilt only when it changes
   let lastAcked: string | null = null;         // the attention episode last acknowledged
@@ -169,6 +170,11 @@ export function mount(root: HTMLElement, deps: InspectorDeps): { render(explicit
     const where: (Node | string)[] = [repo?.name ?? "unknown repo"];
     if (c !== undefined) where.push(el("span", { class: "dim" }, ` · ${repoRank(c.repoXp[s.repoId] ?? 0)}`));
     const activity = [...s.activity].reverse();
+    const dismiss = confirmDismiss
+      ? el("div", { class: "confirm" }, "Dismiss this session? Use it when its terminal is gone; it ends as if the session had closed.",
+        el("button", { type: "button", class: "danger", "data-action": "dismiss-yes" }, "Dismiss"),
+        el("button", { type: "button", "data-action": "dismiss-no" }, "Keep"))
+      : el("button", { type: "button", class: "danger", "data-action": "dismiss", title: "End a session whose terminal is gone" }, "Dismiss session…");
     return [
       el("dl", {},
         ...row("State", STATE_TEXT[s.state], el("span", { class: "dim" }, " for "), since(s.stateSince)),
@@ -181,6 +187,7 @@ export function mount(root: HTMLElement, deps: InspectorDeps): { render(explicit
       activity.length === 0
         ? el("p", { class: "dim" }, "No activity yet.")
         : el("ol", { class: "activity" }, ...activity.map(a => el("li", {}, el("time", {}, clock(a.at)), el("span", {}, a.text)))),
+      el("div", { class: "actions retire" }, dismiss),
     ];
   }
 
@@ -244,6 +251,12 @@ export function mount(root: HTMLElement, deps: InspectorDeps): { render(explicit
   body.addEventListener("click", e => {
     const t = e.target as HTMLElement;
     const found = resolve();
+    const s = found?.s;
+    switch (t.closest<HTMLElement>("[data-action]")?.dataset.action) {
+      case "dismiss": confirmDismiss = true; rebuild(); return;
+      case "dismiss-no": confirmDismiss = false; rebuild(); return;
+      case "dismiss-yes": confirmDismiss = false; if (s !== undefined) void call(api.dismiss(s.key)); rebuild(); return;
+    }
     const c = found?.c;
     if (c === undefined) return;
     const opt = t.closest<HTMLButtonElement>("[data-field]");
@@ -303,6 +316,7 @@ export function mount(root: HTMLElement, deps: InspectorDeps): { render(explicit
     tab = "now";
     draft = null;
     confirmRetire = false;
+    confirmDismiss = false;
     renaming = false;
     bodyKey = "";
     showError("");
@@ -325,7 +339,7 @@ export function mount(root: HTMLElement, deps: InspectorDeps): { render(explicit
     for (const b of tabs.querySelectorAll<HTMLElement>("[data-tab]")) b.setAttribute("aria-selected", String(b.dataset.tab === tab));
     renderHead(c, s);
 
-    const key = JSON.stringify([tab, c, tab === "now" ? s : null, draft, confirmRetire, tab === "now" || tab === "history" ? [...state.repos.keys()] : null]);
+    const key = JSON.stringify([tab, c, tab === "now" ? s : null, draft, confirmRetire, confirmDismiss, tab === "now" || tab === "history" ? [...state.repos.keys()] : null]);
     if (key === bodyKey) return;
     bodyKey = key;
     body.replaceChildren(...(tab === "now" ? nowTab(c, s) : tab === "look" ? lookTab(c!) : tab === "history" ? historyTab(c!) : achievementsTab(c!)));

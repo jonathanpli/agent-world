@@ -41,5 +41,6 @@ async function call<T>(method: string, path: string, body?: unknown): Promise<T>
 export const api = {
   patchCharacter: (id: string, patch: object): Promise<Character> => call("PATCH", `/api/characters/${encodeURIComponent(id)}`, patch),
   ack: (key: string): Promise<void> => call("POST", `/api/sessions/${encodeURIComponent(key)}/ack`),
+  dismiss: (key: string): Promise<void> => call("POST", `/api/sessions/${encodeURIComponent(key)}/dismiss`),
   putSettings: (patch: Partial<Settings>): Promise<Settings> => call("PUT", "/api/settings", patch),
 };

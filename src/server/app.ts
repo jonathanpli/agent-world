@@ -107,6 +107,9 @@ export function createApp(opts: AppOptions): App {
     for (const s of streams) s.write(msg);
   }
 
+  // A demo run starts its session ids again from demo-1: whatever the last run left behind would sit frozen forever.
+  if (demo) for (const s of world.snapshot(now(), demo).sessions) commit(world.end(s.key, now()));
+
   async function pipeline(ev: AgentEvent): Promise<void> {
     ev.repoPath = await within(resolveRepo(ev.repoPath), CONFIG.repoResolveTimeoutMs, ev.repoPath);
     const key = `${ev.source}:${ev.sessionId}`;
@@ -245,6 +248,14 @@ export function createApp(opts: AppOptions): App {
       const key = decode(m[1]!);
       if (key === null) return badEscape();
       commit(world.ack(key));
+      return sendStatus(res, 204);
+    }
+    if (method === "POST" && (m = path.match(/^\/api\/sessions\/([^/]+)\/dismiss$/))) {
+      const key = decode(m[1]!);
+      if (key === null) return badEscape();
+      const deltas = world.end(key, now());
+      if (deltas.length === 0) return sendJson(res, 404, { error: "unknown session" });
+      commit(deltas);
       return sendStatus(res, 204);
     }
     if (method === "PUT" && path === "/api/settings") return putSettings(req, res);

@@ -50,7 +50,7 @@ test("session_removed deletes the row", () => {
 
 test("notice deltas are not stored", () => {
   const store = openStore(":memory:"); const w = newWorld();
-  const deltas = [...w.apply(ev("session_start")), ...w.apply(ev("needs_input"))];
+  const deltas = [...w.apply(ev("session_start")), ...w.apply(ev("tool")), ...w.apply(ev("needs_input"))];
   expect(deltas.some(d => d.type === "notice")).toBe(true);
   expect(() => store.persist(deltas)).not.toThrow();
   store.close();
