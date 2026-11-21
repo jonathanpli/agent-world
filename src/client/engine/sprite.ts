@@ -14,8 +14,22 @@ export type Pal = {
   pants: string; pantsS: string; shoe: string;
 };
 
-/** Everything the parts need to place themselves: head top row, torso top row, view and facing. */
-export type Frame = { g: PixelGrid; p: Pal; hy: number; by: number; back: boolean; facing: 1 | -1; pose: Pose; step: number; frame: number };
+/** Everything the parts need to place themselves: head top row, torso top row, view and facing. `spread` moves raised hands outward. */
+export type Frame = { g: PixelGrid; p: Pal; hy: number; by: number; back: boolean; facing: 1 | -1; pose: Pose; step: number; frame: number; spread: number };
+
+/**
+ * A theme's costume over the base look. Every hook draws into the same grid as the body, so one outline wraps it all.
+ * Body colour, skin and hair stay as they are; the hat is drawn over the costume's headgear.
+ */
+export type Costume = {
+  pal?: Partial<Pick<Pal, "pants" | "pantsS" | "shoe">>;
+  behind?(f: Frame): void;                          // first, behind the body
+  body?(f: Frame): void;                            // over legs and torso, under resting arms and the head
+  keepHead?(x: number, y: number, f: Frame): boolean;   // hair and accessory pixels where this is false are dropped
+  head?(f: Frame): void;                            // over head, hair and accessory; under the hat
+  hatLift?: number;                                 // rows to raise the hat, so it sits on a helmet
+  spread?: number;                                  // px to move raised hands outward, clear of a helmet
+};
 
 function palette(look: Look): Pal {
   return {
@@ -112,9 +126,9 @@ function arms(f: Frame): void {
     case "raise_hand": {
       const side = facing > 0 ? 11 : 4;
       const other = facing > 0 ? 4 : 11;
-      const out = facing > 0 ? 12 : 3;
+      const out = facing > 0 ? 12 + f.spread : 3 - f.spread;
       sleeve(other, by, by + 2); g.set(other, by + 3, p.skin);
-      sleeve(side, by, by);
+      g.fill(Math.min(side, out), by, Math.max(side, out), by, p.body);
       g.fill(out, by - 5, out, by, p.body);
       const wave = step === 0 ? 0 : facing;
       g.fill(out + wave, by - 7, out + wave, by - 6, p.skin);
@@ -125,10 +139,12 @@ function arms(f: Frame): void {
       for (const [i, out] of [-1, 1].entries()) {
         const lift = i === pump ? 1 : 0;
         const sx = i === 0 ? 4 : 11;
+        const o = f.spread * out;
         g.set(sx, by, p.body);
-        g.fill(sx + out, by - 3 - lift, sx + out, by - 1, p.body);
-        g.fill(sx + 2 * out, by - 4 - lift, sx + 2 * out, by - 3 - lift, p.body);
-        g.fill(sx + 2 * out, by - 6 - lift, sx + 2 * out, by - 5 - lift, p.skin);
+        if (o !== 0) g.fill(Math.min(sx, sx + out + o), by, Math.max(sx, sx + out + o), by, p.body);
+        g.fill(sx + out + o, by - 3 - lift, sx + out + o, by - 1, p.body);
+        g.fill(sx + 2 * out + o, by - 4 - lift, sx + 2 * out + o, by - 3 - lift, p.body);
+        g.fill(sx + 2 * out + o, by - 6 - lift, sx + 2 * out + o, by - 5 - lift, p.skin);
       }
       return;
     }
@@ -144,26 +160,53 @@ function arms(f: Frame): void {
 
 const GRID = { w: 26, h: 36, ox: 5, oy: 10 } as const;
 
-/** Draws the base character with its feet centre at `at`. `facing` 1 looks right. */
-export function drawBase(ctx: Ctx, at: Point, look: Look, pose: Pose, frame: number, facing: 1 | -1): void {
+export type BaseOpts = { costume?: Costume; back?: boolean };
+
+/** Composes the character (outlined) into a grid; `jump` is how far the pose lifts it this frame. */
+export function composeBase(look: Look, pose: Pose, frame: number, facing: 1 | -1, opts: BaseOpts = {}): { g: PixelGrid; jump: number } {
   const g = new PixelGrid(GRID.w, GRID.h, GRID.ox, GRID.oy);
   const fr = Math.max(0, Math.floor(frame));
-  const back = pose === "sit_type";
-  const seated = back || pose === "lean";
-  const hy = seated ? 6 : 4;
-  const f: Frame = { g, p: palette(look), hy, by: hy + 8, back, facing, pose, step: (fr >> 1) & 1, frame: fr };
+  const c = opts.costume;
+  const back = opts.back ?? pose === "sit_type";
+  const hy = pose === "sit_type" || pose === "lean" ? 6 : 4;
+  const f: Frame = { g, p: { ...palette(look), ...c?.pal }, hy, by: hy + 8, back, facing, pose, step: (fr >> 1) & 1, frame: fr, spread: c?.spread ?? 0 };
+  c?.behind?.(f);
   if (look.accessory === "cape" && !back) drawAccessory(f, "cape");
   legs(f);
   torso(f);
   if (look.accessory === "cape" && back) drawAccessory(f, "cape");
+  c?.body?.(f);
   if (pose !== "raise_hand" && pose !== "cheer") arms(f);
+  const before = c?.keepHead === undefined ? null : [...g.px];
   head(f);
   drawHair(f, look.hairStyle);
-  if (look.accessory !== null && look.accessory !== "cape" && look.accessory !== "headphones") drawAccessory(f, look.accessory);
-  if (look.accessory === "headphones") drawAccessory(f, "headphones");
-  if (look.hat !== null) drawHat(f, look.hat);
+  if (look.accessory !== null && look.accessory !== "cape") drawAccessory(f, look.accessory);
+  if (before !== null) {
+    for (let y = -GRID.oy; y < GRID.h - GRID.oy; y++) for (let x = -GRID.ox; x < GRID.w - GRID.ox; x++) {
+      const i = (y + GRID.oy) * GRID.w + x + GRID.ox;
+      if (g.px[i] !== before[i] && !c!.keepHead!(x, y, f)) g.px[i] = before[i]!;
+    }
+  }
+  c?.head?.(f);
+  if (look.hat !== null) drawHat({ ...f, hy: hy - (c?.hatLift ?? 0) }, look.hat);
   if (pose === "raise_hand" || pose === "cheer") arms(f);
   g.outline(OUTLINE);
   const jump = pose === "cheer" && f.step === 1 ? -2 : pose === "walk" && f.step === 1 ? -1 : 0;
+  return { g, jump };
+}
+
+/** Draws the base character with its feet centre at `at`. `facing` 1 looks right. */
+export function drawBase(ctx: Ctx, at: Point, look: Look, pose: Pose, frame: number, facing: 1 | -1, opts: BaseOpts = {}): void {
+  const { g, jump } = composeBase(look, pose, frame, facing, opts);
   g.blit(ctx, at.x - SPRITE.w / 2, at.y - SPRITE.h + jump);
+}
+
+/** Draws the character turned a quarter (head toward `facing`), centred on `centre`: a swimmer seen from above and behind. */
+export function drawBaseTurned(ctx: Ctx, centre: Point, look: Look, pose: Pose, frame: number, facing: 1 | -1, opts: BaseOpts = {}): void {
+  const { g } = composeBase(look, pose, frame, facing, opts);
+  const r = g.turned(facing > 0);
+  // the sprite's middle, (SPRITE.w / 2, SPRITE.h / 2) local, after the quarter turn
+  const mx = GRID.ox + SPRITE.w / 2, my = GRID.oy + SPRITE.h / 2;
+  const [cx, cy] = facing > 0 ? [GRID.h - 1 - my, mx] : [my, GRID.w - 1 - mx];
+  r.blit(ctx, Math.round(centre.x - cx), Math.round(centre.y - cy));
 }

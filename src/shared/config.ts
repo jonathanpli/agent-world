@@ -45,7 +45,10 @@ export const CONFIG = {
     noticeMax: 50,
     reconnectMs: 2_000,
     speed: { walk: 40, float: 25, swim: 30 },     // px/s
-    bobPx: 2, bobHz: 0.6,                         // float/swim sine bob, drawing only
+    bob: { walk: { px: 0, hz: 0 }, float: { px: 3, hz: 0.3 }, swim: { px: 2, hz: 0.7 } },   // sine bob, drawing only
+    fadeMs: 400,                                  // theme switch: to black and back; the swap is at the midpoint
+    space: { starDriftPx: 2, cometEveryS: 21, cometS: 2.4, sparkHz: 10 },                 // star drift px/s; a comet every cometEveryS for cometS
+    underwater: { bubbleRisePx: 14, schoolS: 26, turtleSpeed: 9 },                        // bubbles and turtle px/s; a fish school lap every schoolS
     arrivePx: 1,
     wanderS: [4, 10],                             // seconds between lounge wander targets
     animFps: 8,

@@ -1,6 +1,6 @@
 import { expect, test, vi } from "vitest";
 import { actorAt, computeLayout, safeLayout, stepActors, syncActors, type Actor } from "../../src/client/engine/actors";
-import { VIEW, type Rect, type Theme } from "../../src/client/engine/theme";
+import { THEMES, VIEW, type Rect, type Theme } from "../../src/client/engine/theme";
 import { applySnapshot, emptyState, type ClientState } from "../../src/client/state";
 import { office } from "../../src/client/themes/office";
 import { mulberry32 } from "../../src/shared/rng";
@@ -18,9 +18,9 @@ function stateWith(sessions: Session[], characters = sessions.flatMap(s => (s.ch
   return s;
 }
 
-test("places never overlap and stay on their screen for 1..20 repos (Review Focus 5)", () => {
+for (const theme of THEMES) test(`${theme.id}: places never overlap and stay on their screen for 1..20 repos (Review Focus 5)`, () => {
   for (let n = 1; n <= 20; n++) {
-    const L = computeLayout(office, repos(n));
+    const L = computeLayout(theme, repos(n));
     expect(L.screens).toBe(Math.ceil(n / 6));
     expect(L.places.size).toBe(n);
     const entries = [...L.places.values()];
@@ -32,7 +32,7 @@ test("places never overlap and stay on their screen for 1..20 repos (Review Focu
       expect(r.y + r.h).toBeLessThanOrEqual(VIEW.h);
       expect(a.place.spots).toHaveLength(6);
       for (const p of a.place.spots) expect(inside(p, r)).toBe(true);
-      if (a.screen === 0) expect(intersects(r, office.lounge)).toBe(false);
+      if (a.screen === 0) expect(intersects(r, theme.lounge)).toBe(false);
       for (const b of entries.slice(i + 1)) if (a.screen === b.screen) expect(intersects(r, b.place.rect)).toBe(false);
     }
     const perScreen = new Map<number, number>();

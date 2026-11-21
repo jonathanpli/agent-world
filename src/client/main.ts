@@ -32,6 +32,7 @@ const settings = mountSettings(settingsDialog, { state });
 
 for (const t of THEMES) themeSelect.add(new Option(t.name, t.id));
 let appliedTheme: string | null = null;
+let instantTheme = true;                 // until the first snapshot is shown, the theme applies without the fade
 const showAppliedTheme = (): void => {
   themeSelect.value = THEMES.some(t => t.id === appliedTheme) ? appliedTheme! : THEMES[0]!.id;
 };
@@ -60,7 +61,7 @@ function sync(): void {
   demoBadge.hidden = !state.demo;
   if (state.settings.theme !== appliedTheme) {
     appliedTheme = state.settings.theme;
-    engine.setTheme(appliedTheme);
+    engine.setTheme(appliedTheme, { instant: instantTheme });
     showAppliedTheme();
   }
   const count = attentionCount(state);
@@ -84,6 +85,7 @@ connect({
   onSnapshot(snap) {
     applySnapshot(state, snap);
     sync();
+    instantTheme = false;
   },
   onDeltas(deltas) {
     const before = new Map([...state.sessions.values()].map(s => [s.key, s.state]));

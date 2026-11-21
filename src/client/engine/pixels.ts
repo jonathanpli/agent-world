@@ -81,6 +81,18 @@ export class PixelGrid {
     }
   }
 
+  /** A copy turned a quarter, clockwise (top to the right) or anticlockwise; the copy's origin is its top-left. */
+  turned(clockwise: boolean): PixelGrid {
+    const out = new PixelGrid(this.h, this.w);
+    for (let y = 0; y < this.h; y++) for (let x = 0; x < this.w; x++) {
+      const c = this.px[y * this.w + x] ?? null;
+      if (c === null) continue;
+      const [nx, ny] = clockwise ? [this.h - 1 - y, x] : [y, this.w - 1 - x];
+      out.px[ny * out.w + nx] = c;
+    }
+    return out;
+  }
+
   /** Draws with local (0, 0) at (x, y). */
   blit(ctx: Ctx, x: number, y: number): void {
     const bx = Math.round(x) - this.ox, by = Math.round(y) - this.oy;

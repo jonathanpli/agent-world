@@ -1,5 +1,7 @@
 import type { CharState, Effort, Look, Tier } from "../../shared/types";
 import { office } from "../themes/office";
+import { space } from "../themes/space";
+import { underwater } from "../themes/underwater";
 
 export { VIEW } from "./view";
 
@@ -7,7 +9,7 @@ export type Point = { x: number; y: number };
 export type Rect = Point & { w: number; h: number };
 export type Place = { rect: Rect; spots: Point[] };   // exactly 6 spots
 export type Pose = "stand" | "walk" | "sit_type" | "raise_hand" | "cheer" | "lean";
-export type Particle = { x: number; y: number; vx: number; vy: number; life: number; color: string; size: number };
+export type Particle = { x: number; y: number; vx: number; vy: number; life: number; color: string; size: number; gravity?: number };
 export type Ctx = CanvasRenderingContext2D;
 
 export type Theme = {
@@ -24,7 +26,7 @@ export type Theme = {
   drawAmbient?(ctx: Ctx, t: number): void;
 };
 
-export const THEMES: Theme[] = [office];
+export const THEMES: Theme[] = [office, space, underwater];
 
 export function getTheme(id: string): Theme {
   return THEMES.find(t => t.id === id) ?? office;

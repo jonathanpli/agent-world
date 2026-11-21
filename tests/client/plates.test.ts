@@ -1,8 +1,7 @@
 import { expect, test } from "vitest";
 import { computeLayout } from "../../src/client/engine/actors";
 import { layoutPlates, plateText, type PlateText } from "../../src/client/engine/overlay";
-import { VIEW, type Point, type Rect } from "../../src/client/engine/theme";
-import { office } from "../../src/client/themes/office";
+import { THEMES, VIEW, type Point, type Rect } from "../../src/client/engine/theme";
 import type { Repo } from "../../src/shared/types";
 import { repo } from "../helpers/clientFixtures";
 
@@ -24,9 +23,9 @@ test("plate text: compact is name and level, full adds the title, temps are just
   expect(plateText("Temp", null, "Engineer", true)).toEqual({ name: "Temp", rest: " · Engineer" });
 });
 
-test("a full place in the bottom row keeps every plate inside the view, on screens 0 and 1", () => {
+for (const theme of THEMES) test(`${theme.id}: a full place in the bottom row keeps every plate inside the view, on screens 0 and 1`, () => {
   for (const [count, screen] of [[6, 0], [12, 1]] as const) {
-    const L = computeLayout(office, repos(count));
+    const L = computeLayout(theme, repos(count));
     for (const idx of [3, 4, 5]) {
       const { place, screen: s } = L.places.get(`r${screen * 6 + idx}`)!;
       expect(s).toBe(screen);
@@ -38,16 +37,16 @@ test("a full place in the bottom row keeps every plate inside the view, on scree
   }
 });
 
-test("a lounge actor at the right edge keeps its full plate on screen", () => {
-  for (const at of [{ x: VIEW.w - 1, y: office.lounge.y + office.lounge.h }, { x: 1, y: VIEW.h }, { x: VIEW.w + 2, y: 0 }] as Point[]) {
+for (const theme of THEMES) test(`${theme.id}: a lounge actor at the right edge keeps its full plate on screen`, () => {
+  for (const at of [{ x: VIEW.w - 1, y: theme.lounge.y + theme.lounge.h }, { x: 1, y: VIEW.h }, { x: VIEW.w + 2, y: 0 }] as Point[]) {
     const screen = Math.floor(at.x / VIEW.w);
     const [r] = layoutPlates([{ at, text: plateText("Margaret", 24, "Principal", true) }]);
     expectOnScreen(r!, screen);
   }
 });
 
-test("compact plates for full rows at the tightest desk pitch never overlap", () => {
-  const L = computeLayout(office, repos(6));
+for (const theme of THEMES) test(`${theme.id}: compact plates for full rows at the tightest spot pitch never overlap`, () => {
+  const L = computeLayout(theme, repos(6));
   const items: { at: Point; text: PlateText }[] = [];
   for (const { place } of L.places.values()) place.spots.forEach((p, i) => items.push({ at: p, text: plateText(NAMES[i]!, 24, "Principal", false) }));
   const pitch = L.places.get("r0")!.place.spots[1]!.x - L.places.get("r0")!.place.spots[0]!.x;
@@ -57,8 +56,8 @@ test("compact plates for full rows at the tightest desk pitch never overlap", ()
   for (const [i, a] of rects.entries()) for (const b of rects.slice(i + 1)) expect(overlaps(a, b)).toBe(false);
 });
 
-test("compact plates move out of the way of an obstacle (the hovered actor's full plate)", () => {
-  const L = computeLayout(office, repos(6));
+for (const theme of THEMES) test(`${theme.id}: compact plates move out of the way of an obstacle (the hovered actor's full plate)`, () => {
+  const L = computeLayout(theme, repos(6));
   const spots = L.places.get("r5")!.place.spots;
   const [full] = layoutPlates([{ at: spots[0]!, text: plateText("Margaret", 24, "Principal", true) }]);
   const rects = layoutPlates(spots.slice(1).map((p, i) => ({ at: p, text: plateText(NAMES[i + 1]!, 3, "Senior", false) })), [full!]);

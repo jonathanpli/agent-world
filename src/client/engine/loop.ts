@@ -4,14 +4,17 @@ import type { CharState, Effort, Look, Tier } from "../../shared/types";
 import { activeRepos, type ClientState } from "../state";
 import { actorAt, safeLayout, sessionsByRepo, stepActors, syncActors, type Actor, type Layout } from "./actors";
 import { drawBubble, drawEdgeButtons, drawPlate, drawSelection, edgeButtons, layoutPlates, plateText } from "./overlay";
+import { createFader } from "./fade";
 import { drawParticles, stepParticles } from "./particles";
+import { rect } from "./pixels";
 import { createSelection } from "./selection";
 import { getTheme, safeDraw, THEMES, VIEW, type Particle, type Point, type Rect, type Theme } from "./theme";
 
 export type Engine = {
   select(actorId: string | null): void;
   onSelect(cb: (actorId: string | null) => void): void;
-  setTheme(id: string): void;
+  /** Switches theme with a short fade to black and back; `instant` skips the fade (the first theme the server sends). */
+  setTheme(id: string, opts?: { instant?: boolean }): void;
   burst(kind: "celebrate" | "levelUp", actorId: string): void;
   /** Where an actor stands across its screen, 0 (left edge) to 1 (right edge); null if it has no actor. */
   screenX(actorId: string): number | null;
@@ -59,6 +62,7 @@ export function startEngine(canvas: HTMLCanvasElement, state: ClientState): Engi
   let screen = 0;
   let camX = 0;
   let last = performance.now() / 1000;
+  const fader = createFader();
 
   // Crisp scaling: the largest whole number of device pixels per world pixel that fits the container.
   const fit = (): void => {
@@ -119,12 +123,19 @@ export function startEngine(canvas: HTMLCanvasElement, state: ClientState): Engi
     last = now;
     const t = now;
     const wall = Date.now();
+    const fade = fader.step(now * 1000);
+    if (fade.swap !== null) theme = getTheme(fade.swap);       // at the midpoint, under full black
 
     const laid = safeLayout(theme, fallback, activeRepos(state));
     layout = laid.layout;
     const active = laid.theme;           // the theme whose layout and lounge are in use
     page(screen);
     syncActors(actors, state, active, layout, t, Math.random);
+    if (fade.swap !== null) {
+      // everyone appears at their place in the new world, and the camera with them
+      for (const a of actors.values()) { a.pos = { ...a.target }; a.moving = false; }
+      camX = screen * VIEW.w;
+    }
     stepActors(actors, dt, active.movement, t);
     const who = resolve(state);
     selection.afterSync();
@@ -171,13 +182,13 @@ export function startEngine(canvas: HTMLCanvasElement, state: ClientState): Engi
         ctx.restore();
       }
 
-      const bob = active.movement === "walk" ? 0 : CONFIG.client.bobPx;
+      const bob = CONFIG.client.bob[active.movement];
       const drawn: { id: string; at: Point; w: Who }[] = [];
       for (const a of [...actors.values()].sort((p, q) => p.pos.y - q.pos.y)) {
         const w = who.get(a.id);
         if (w === undefined) continue;
         const phase = (a.id.length * 0.7) % (Math.PI * 2);
-        const at = { x: Math.round(a.pos.x), y: Math.round(a.pos.y + Math.sin(t * Math.PI * 2 * CONFIG.client.bobHz + phase) * bob) };
+        const at = { x: Math.round(a.pos.x), y: Math.round(a.pos.y + Math.sin(t * Math.PI * 2 * bob.hz + phase) * bob.px) };
         const f = Math.floor(anim.get(a.id)?.frame ?? 0);
         draw(th => th.drawCharacter(ctx, at, w.look, w.tier, w.state, w.effort, f, a.facing, a.moving));
         drawn.push({ id: a.id, at, w });
@@ -201,13 +212,22 @@ export function startEngine(canvas: HTMLCanvasElement, state: ClientState): Engi
       ctx.restore();
     }
     drawEdgeButtons(ctx, screen, layout.screens);
+    if (fade.alpha > 0) {
+      ctx.globalAlpha = fade.alpha;
+      rect(ctx, 0, 0, VIEW.w, VIEW.h, "#000000");
+      ctx.globalAlpha = 1;
+    }
   }
   requestAnimationFrame(frame);
 
   return {
     select,
     onSelect: selection.onSelect,
-    setTheme: id => { theme = getTheme(id); },
+    setTheme: (id, opts) => {
+      if (opts?.instant === true) { theme = getTheme(id); return; }
+      if (!fader.busy() && getTheme(id) === theme) return;
+      fader.start(id, performance.now());
+    },
     burst: (kind, actorId) => {
       const a = actors.get(actorId);
       if (a === undefined) return;

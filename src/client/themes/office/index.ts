@@ -1,4 +1,5 @@
 import type { CharState, Effort, Look, Tier } from "../../../shared/types";
+import { placeOnGrid } from "../../engine/grid";
 import { ellipse, rect } from "../../engine/pixels";
 import { drawBase, poseFor } from "../../engine/sprite";
 import type { Ctx, Particle, Place, Point, Theme } from "../../engine/theme";
@@ -7,25 +8,8 @@ import { chair, drawWorkSpot } from "./desks";
 import { OFFICE } from "./palette";
 import { AREA, drawBackdrop, drawPlace, LOUNGE, PLACE } from "./room";
 
-const GRID: Record<number, [number, number]> = { 1: [1, 1], 2: [2, 1], 3: [3, 1], 4: [2, 2], 5: [3, 2], 6: [3, 2] };
-
 /** Places on a grid sized to the count, the last row centred; each has two rows of three desks. */
-function placeFor(index: number, count: number): Place {
-  const [cols, rows] = GRID[Math.min(6, Math.max(1, count))]!;
-  const row = Math.floor(index / cols);
-  const col = index - row * cols;
-  const inRow = row === rows - 1 ? count - cols * (rows - 1) : cols;
-  const cellW = AREA.w / cols, cellH = AREA.h / rows;
-  const w = Math.floor(Math.min(cellW - PLACE.gap, PLACE.maxW));
-  const h = Math.floor(Math.min(cellH - PLACE.gap, PLACE.maxH));
-  const x = Math.round(AREA.x + ((cols - inRow) * cellW) / 2 + col * cellW + (cellW - w) / 2);
-  const y = Math.round(AREA.y + row * cellH + (cellH - h) / 2);
-  const spots: Point[] = [];
-  for (let r = 0; r < 2; r++) for (let c = 0; c < 3; c++) {
-    spots.push({ x: Math.round(x + (w * (2 * c + 1)) / 6), y: y + PLACE.row0 + r * PLACE.rowH });
-  }
-  return { rect: { x, y, w, h }, spots };
-}
+const placeFor = (index: number, count: number): Place => placeOnGrid(AREA, PLACE, index, count);
 
 function aura(ctx: Ctx, at: Point, effort: Effort, frame: number): void {
   const c = effort === "max" ? OFFICE.aura.max : OFFICE.aura.xhigh;

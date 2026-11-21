@@ -1,13 +1,13 @@
 import { CONFIG } from "../../shared/config";
 import type { Ctx, Particle } from "./theme";
 
-/** Advances particles by `dt` seconds under gravity and drops the dead ones. */
+/** Advances particles by `dt` seconds under gravity (scaled per particle: 0 floats, negative rises) and drops the dead ones. */
 export function stepParticles(ps: Particle[], dt: number): Particle[] {
   const out: Particle[] = [];
   for (const p of ps) {
     const life = p.life - dt;
     if (life <= 0) continue;
-    const vy = p.vy + CONFIG.client.gravity * dt;
+    const vy = p.vy + CONFIG.client.gravity * (p.gravity ?? 1) * dt;
     out.push({ ...p, life, vy, x: p.x + p.vx * dt, y: p.y + vy * dt });
   }
   return out;
