@@ -22,7 +22,7 @@ export const CONFIG = {
   demoPort: 4318,
   ingestBodyMax: 5_000_000,
   tickMs: 5_000,
-  modelRetryMs: 30_000,
+  modelRetryMs: 2_000,
   transcriptTailBytes: 262_144,
   gitTimeoutMs: 1_000,
   repoResolveTimeoutMs: 2_500,

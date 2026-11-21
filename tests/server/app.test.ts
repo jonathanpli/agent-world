@@ -121,13 +121,23 @@ test("model fallback retries at most once per interval while the model is unknow
   await ingest(base, fx("SessionStart"));
   await ingest(base, fx("UserPromptSubmit"));
   expect(calls).toBe(1);
-  t += 30_000; answer = "claude-haiku-4-5";
+  t += CONFIG.modelRetryMs; answer = "claude-haiku-4-5";
   await ingest(base, fx("PostToolUse"));
   expect(calls).toBe(2);
   expect((await snapshot(base)).sessions[0]).toMatchObject({ model: "claude-haiku-4-5", tier: 1 });
   t += 60_000;
   await ingest(base, fx("PostToolUse"));
   expect(calls).toBe(2);
+});
+
+test("model fallback reaches a short session whose transcript appears after SessionStart (live run timing)", async () => {
+  let t = 1_000_000; let answer: string | null = null;
+  const { base } = await start({ now: () => t, readModel: async () => answer });
+  await ingest(base, fx("SessionStart"));
+  t += 1_300; await ingest(base, fx("UserPromptSubmit"));
+  t += 4_000; answer = "claude-opus-5-5";   // the first assistant message is on disk by the first tool call
+  await ingest(base, fx("PostToolUse"));
+  expect((await snapshot(base)).sessions[0]).toMatchObject({ model: "claude-opus-5-5", tier: 3 });
 });
 
 test("PATCH character", async () => {
