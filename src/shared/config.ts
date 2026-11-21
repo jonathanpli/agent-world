@@ -7,6 +7,7 @@ export const CONFIG = {
   sessionStaleMs: 43_200_000,
   noticeThrottleMs: 10_000,
   rosterCapDefault: 12,
+  rosterCapMax: 50,
   activityMax: 20,
   textMax: 500,
   summaryMax: 80,
