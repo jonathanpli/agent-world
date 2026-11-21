@@ -1,0 +1,152 @@
+import { mkdirSync } from "node:fs";
+import { dirname } from "node:path";
+import { DatabaseSync, type SQLInputValue } from "node:sqlite";
+import { CONFIG } from "../shared/config";
+import type { AgentEvent, Character, Delta, Repo, Session, Settings } from "../shared/types";
+import type { WorldInit } from "../core/world";
+import { MIGRATIONS } from "./migrations";
+
+export type Store = {
+  load(): WorldInit;                    // settings default to CONFIG.defaultSettings when absent
+  persist(deltas: Delta[]): void;       // one transaction; `notice` deltas are not stored
+  logEvent(ev: AgentEvent): void;
+  pruneEvents(olderThan: number): void;
+  eventCount(): number;
+  close(): void;
+};
+
+type Row = Record<string, SQLInputValue>;
+
+function migrate(db: DatabaseSync): void {
+  const row = db.prepare("PRAGMA user_version").get() as { user_version: number };
+  for (let v = row.user_version; v < MIGRATIONS.length; v++) {
+    db.exec("BEGIN");
+    try {
+      db.exec(MIGRATIONS[v]!);
+      db.exec(`PRAGMA user_version = ${v + 1}`);
+      db.exec("COMMIT");
+    } catch (e) {
+      db.exec("ROLLBACK");
+      throw e;
+    }
+  }
+}
+
+export function openStore(path: string): Store {
+  if (path !== ":memory:") mkdirSync(dirname(path), { recursive: true });
+  const db = new DatabaseSync(path);
+  migrate(db);
+
+  // Upserts (not INSERT OR REPLACE) keep a row's rowid, so load order stays the order rows were first created.
+  const upsertCharacter = db.prepare(`
+    INSERT INTO characters (id, name, tier, look, xp, created_at, last_active_at, retired, stats)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+    ON CONFLICT(id) DO UPDATE SET name = excluded.name, tier = excluded.tier, look = excluded.look, xp = excluded.xp,
+      created_at = excluded.created_at, last_active_at = excluded.last_active_at, retired = excluded.retired, stats = excluded.stats`);
+  const clearCharacterRepo = db.prepare("DELETE FROM character_repo WHERE character_id = ?");
+  const insertCharacterRepo = db.prepare("INSERT INTO character_repo (character_id, repo_id, xp) VALUES (?, ?, ?)");
+  const clearAchievements = db.prepare("DELETE FROM achievements WHERE character_id = ?");
+  const insertAchievement = db.prepare("INSERT INTO achievements (character_id, achievement_id, earned_at) VALUES (?, ?, ?)");
+  const upsertRepo = db.prepare(`
+    INSERT INTO repos (id, path, name, created_at) VALUES (?, ?, ?, ?)
+    ON CONFLICT(id) DO UPDATE SET path = excluded.path, name = excluded.name, created_at = excluded.created_at`);
+  const upsertSession = db.prepare(`
+    INSERT INTO sessions (key, source, session_id, character_id, temp_look, repo_id, state, state_since, model, tier, effort,
+      started_at, last_event_at, task, last_summary, attention, activity)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    ON CONFLICT(key) DO UPDATE SET source = excluded.source, session_id = excluded.session_id, character_id = excluded.character_id,
+      temp_look = excluded.temp_look, repo_id = excluded.repo_id, state = excluded.state, state_since = excluded.state_since,
+      model = excluded.model, tier = excluded.tier, effort = excluded.effort, started_at = excluded.started_at,
+      last_event_at = excluded.last_event_at, task = excluded.task, last_summary = excluded.last_summary,
+      attention = excluded.attention, activity = excluded.activity`);
+  const deleteSession = db.prepare("DELETE FROM sessions WHERE key = ?");
+  const upsertSetting = db.prepare(`
+    INSERT INTO settings (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value`);
+  const insertEvent = db.prepare("INSERT INTO events (at, source, session_id, repo_path, kind, payload) VALUES (?, ?, ?, ?, ?, ?)");
+  const deleteEventsBefore = db.prepare("DELETE FROM events WHERE at < ?");
+  const countEvents = db.prepare("SELECT COUNT(*) AS n FROM events");
+
+  function saveCharacter(c: Character): void {
+    upsertCharacter.run(c.id, c.name, c.tier, JSON.stringify(c.look), c.xp, c.createdAt, c.lastActiveAt, c.retired ? 1 : 0, JSON.stringify(c.stats));
+    clearCharacterRepo.run(c.id);
+    for (const [repoId, xp] of Object.entries(c.repoXp)) insertCharacterRepo.run(c.id, repoId, xp);
+    clearAchievements.run(c.id);
+    for (const [id, at] of Object.entries(c.achievements)) insertAchievement.run(c.id, id, at);
+  }
+
+  function saveSession(s: Session): void {
+    upsertSession.run(
+      s.key, s.source, s.sessionId, s.characterId, s.tempLook === null ? null : JSON.stringify(s.tempLook), s.repoId, s.state, s.stateSince,
+      s.model, s.tier, s.effort, s.startedAt, s.lastEventAt, s.task, s.lastSummary, s.attention ? 1 : 0, JSON.stringify(s.activity),
+    );
+  }
+
+  function saveSettings(settings: Settings): void {
+    for (const [k, v] of Object.entries(settings)) upsertSetting.run(k, JSON.stringify(v));
+  }
+
+  function load(): WorldInit {
+    const repoXp = new Map<string, Record<string, number>>();
+    for (const r of db.prepare("SELECT * FROM character_repo").all() as Row[]) {
+      const id = r.character_id as string;
+      const m = repoXp.get(id) ?? {};
+      m[r.repo_id as string] = r.xp as number;
+      repoXp.set(id, m);
+    }
+    const achievements = new Map<string, Record<string, number>>();
+    for (const r of db.prepare("SELECT * FROM achievements").all() as Row[]) {
+      const id = r.character_id as string;
+      const m = achievements.get(id) ?? {};
+      m[r.achievement_id as string] = r.earned_at as number;
+      achievements.set(id, m);
+    }
+    const characters = (db.prepare("SELECT * FROM characters ORDER BY rowid").all() as Row[]).map((r): Character => ({
+      id: r.id as string, name: r.name as string, tier: r.tier as Character["tier"], look: JSON.parse(r.look as string),
+      xp: r.xp as number, createdAt: r.created_at as number, lastActiveAt: r.last_active_at as number, retired: r.retired === 1,
+      repoXp: repoXp.get(r.id as string) ?? {}, stats: JSON.parse(r.stats as string), achievements: achievements.get(r.id as string) ?? {},
+    }));
+    const repos = (db.prepare("SELECT * FROM repos ORDER BY rowid").all() as Row[]).map((r): Repo => ({
+      id: r.id as string, path: r.path as string, name: r.name as string, createdAt: r.created_at as number,
+    }));
+    const sessions = (db.prepare("SELECT * FROM sessions ORDER BY rowid").all() as Row[]).map((r): Session => ({
+      key: r.key as string, source: r.source as string, sessionId: r.session_id as string,
+      characterId: r.character_id as string | null, tempLook: r.temp_look === null ? null : JSON.parse(r.temp_look as string),
+      repoId: r.repo_id as string, state: r.state as Session["state"], stateSince: r.state_since as number,
+      model: r.model as string | null, tier: r.tier as Session["tier"], effort: r.effort as Session["effort"],
+      startedAt: r.started_at as number, lastEventAt: r.last_event_at as number, task: r.task as string | null,
+      lastSummary: r.last_summary as string | null, attention: r.attention === 1, activity: JSON.parse(r.activity as string),
+    }));
+    const settings: Record<string, unknown> = { ...CONFIG.defaultSettings };
+    for (const r of db.prepare("SELECT key, value FROM settings").all() as Row[]) settings[r.key as string] = JSON.parse(r.value as string);
+    return { characters, repos, sessions, settings: settings as Settings };
+  }
+
+  function persist(deltas: Delta[]): void {
+    db.exec("BEGIN");
+    try {
+      for (const d of deltas) {
+        switch (d.type) {
+          case "character": saveCharacter(d.character); break;
+          case "repo": upsertRepo.run(d.repo.id, d.repo.path, d.repo.name, d.repo.createdAt); break;
+          case "session": saveSession(d.session); break;
+          case "session_removed": deleteSession.run(d.key); break;
+          case "settings": saveSettings(d.settings); break;
+          case "notice": break;
+        }
+      }
+      db.exec("COMMIT");
+    } catch (e) {
+      db.exec("ROLLBACK");
+      throw e;
+    }
+  }
+
+  return {
+    load,
+    persist,
+    logEvent: ev => { insertEvent.run(ev.at, ev.source, ev.sessionId, ev.repoPath, ev.kind, JSON.stringify(ev)); },
+    pruneEvents: olderThan => { deleteEventsBefore.run(olderThan); },
+    eventCount: () => (countEvents.get() as { n: number }).n,
+    close: () => db.close(),
+  };
+}
