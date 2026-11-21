@@ -32,6 +32,13 @@ export const SPACE = {
   deck: { glass: "#060a1e", glassL: "#0d1536", frame: "#c4cbdb", frameD: "#8a93a8", bench: "#4f6fa8", benchL: "#6f8fc8", leaf: "#4fa860", leafL: "#7fcf72", tray: "#596079" },
   shuttle: { c: "#eef1f6", s: "#b9c0cf", nose: "#2a2f43", window: "#6fe3ff", stripe: "#e0503c", flame: "#ffb02e" },
   comet: { head: "#ffffff", tail: ["#cfefff", "#8fd6ff", "#4f8fd0"] },
+  // tool actions, the oxygen-tank gauge, the tank swap and the sidekick drone (extras.ts)
+  holo: { bg: "#06283a", glow: "#6fe3ff", glyph: "#6fe3ff", glyphL: "#d8fbff", beam: "#ffffff" },
+  radar: { bg: "#0a2418", ring: "#2f9a52", sweep: "#5cf08a", blip: "#ffd23f" },
+  dish: { c: "#c4cbdb", d: "#7d8599", ping: "#6fe3ff" },
+  tank: { body: "#e3e8f1", bodyS: "#a3abbe", bodyL: "#ffffff", valve: "#7d8599", window: "#0f1e33", empty: "#26304a",
+    o2: ["#ff7a3c", "#ffd23f", "#9cf08c", "#5cf08a"], hot: "#ff4d4d", spent: "#8a93a8", vent: "#e8f2ff" },
+  bot: { c: "#dfe5ef", s: "#a3abbe", d: "#6b7389", visor: "#14223a", eye: "#6fe3ff", busy: "#ffd23f", led: "#5cf08a", puff: "#dfe6f2" },
   aura: { xhigh: "#6fe3ff", max: "#d08bff" },
   confetti: ["#6fe3ff", "#ff6fd8", "#ffd23f", "#9cf08c", "#ffffff", "#c77dff"],
   sparkle: ["#ffe066", "#fff3b0", "#6fe3ff", "#ffffff"],

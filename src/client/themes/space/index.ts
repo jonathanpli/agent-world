@@ -3,6 +3,7 @@ import { placeOnGrid } from "../../engine/grid";
 import { ellipse, rect, shade } from "../../engine/pixels";
 import { drawBase, poseFor } from "../../engine/sprite";
 import type { Ctx, Particle, Place, Point, Theme } from "../../engine/theme";
+import { drawAction, drawCompaction, drawContextGauge, drawSidekick, socialSpots } from "./extras";
 import { drawWorkSpot } from "./modules";
 import { SPACE } from "./palette";
 import { AREA, drawBackdrop, drawComet, drawPlace, LOUNGE, PLACE } from "./scenery";
@@ -166,4 +167,9 @@ export const space: Theme = {
   drawCharacter,
   effects: { celebrate, levelUp },
   drawAmbient: drawComet,
+  drawAction,
+  drawSidekick,
+  drawContextGauge,
+  drawCompaction,
+  socialSpots,
 };
