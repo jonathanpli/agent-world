@@ -5,6 +5,7 @@ import { activeRepos, type ClientState } from "../state";
 import { actorAt, safeLayout, sessionsByRepo, stepActors, syncActors, type Actor, type Layout } from "./actors";
 import { drawBubble, drawEdgeButtons, drawPlate, drawSelection, edgeButtons, layoutPlates, plateText } from "./overlay";
 import { drawParticles, stepParticles } from "./particles";
+import { createSelection } from "./selection";
 import { getTheme, safeDraw, THEMES, VIEW, type Particle, type Point, type Rect, type Theme } from "./theme";
 
 export type Engine = {
@@ -12,6 +13,8 @@ export type Engine = {
   onSelect(cb: (actorId: string | null) => void): void;
   setTheme(id: string): void;
   burst(kind: "celebrate" | "levelUp", actorId: string): void;
+  /** Where an actor stands across its screen, 0 (left edge) to 1 (right edge); null if it has no actor. */
+  screenX(actorId: string): number | null;
 };
 
 /** What an actor is right now, resolved from the state each frame. */
@@ -52,9 +55,7 @@ export function startEngine(canvas: HTMLCanvasElement, state: ClientState): Engi
   const actors = new Map<string, Actor>();
   const anim = new Map<string, { state: CharState; since: number; frame: number }>();
   let particles: Particle[] = [];
-  let selected: string | null = null;
   let hovered: string | null = null;
-  const listeners: ((id: string | null) => void)[] = [];
   let screen = 0;
   let camX = 0;
   let last = performance.now() / 1000;
@@ -73,12 +74,8 @@ export function startEngine(canvas: HTMLCanvasElement, state: ClientState): Engi
 
   const page = (to: number): void => { screen = Math.max(0, Math.min(layout.screens - 1, to)); };
 
-  const select = (id: string | null): void => {
-    selected = id;
-    const a = id === null ? undefined : actors.get(id);
-    if (a !== undefined) page(Math.floor(a.target.x / VIEW.w));
-    for (const cb of listeners) cb(id);
-  };
+  const selection = createSelection(actors, a => page(Math.floor(a.target.x / VIEW.w)));
+  const select = selection.select;
 
   const toView = (e: MouseEvent): Point => {
     const r = canvas.getBoundingClientRect();
@@ -130,7 +127,8 @@ export function startEngine(canvas: HTMLCanvasElement, state: ClientState): Engi
     syncActors(actors, state, active, layout, t, Math.random);
     stepActors(actors, dt, active.movement, t);
     const who = resolve(state);
-    if (selected !== null && !actors.has(selected)) select(null);
+    selection.afterSync();
+    const selected = selection.selected();
 
     // animation frames count from when the state began
     for (const [id, w] of who) {
@@ -208,12 +206,18 @@ export function startEngine(canvas: HTMLCanvasElement, state: ClientState): Engi
 
   return {
     select,
-    onSelect: cb => { listeners.push(cb); },
+    onSelect: selection.onSelect,
     setTheme: id => { theme = getTheme(id); },
     burst: (kind, actorId) => {
       const a = actors.get(actorId);
       if (a === undefined) return;
       draw(th => { particles.push(...th.effects[kind]({ ...a.pos }, Math.random)); });
+    },
+    screenX: actorId => {
+      const a = actors.get(actorId);
+      if (a === undefined) return null;
+      const x = a.target.x / VIEW.w;
+      return x - Math.floor(x);
     },
   };
 }

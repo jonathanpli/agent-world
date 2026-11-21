@@ -59,6 +59,10 @@ export const CONFIG = {
     gravity: 140,                                 // px/s² on particles
     particleFadeS: 0.5,
     catSpeed: 16,                                 // px/s, the office cat
+    tickerMax: 8,                                 // notice texts shown in the ticker
+    chime: { tonesHz: [880, 1318.5], toneS: 0.12, gapS: 0.05, gain: 0.08 },   // two short sine tones
+    previewScale: 4,                              // inspector Look preview: device px per sprite px
+    clockMs: 1_000,                               // inspector durations refresh
   },
   defaultSettings: { theme: "office", notifyNeedsInput: true, notifyDone: true, sound: false, rosterCap: 12 },
 } as const;
