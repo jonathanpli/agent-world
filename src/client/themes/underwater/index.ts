@@ -39,7 +39,6 @@ function storm(ctx: Ctx, at: Point, frame: number, front: boolean): void {
   }
 }
 
-/** A dive torch in the right hand, its beam reaching up to the reef in front. */
 /** A dive torch in the right hand, its beam reaching up and out to the reef, clear of the diver's head. */
 function torch(ctx: Ctx, at: Point, frame: number): void {
   const lift = frame % 2;

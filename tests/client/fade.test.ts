@@ -72,3 +72,44 @@ test("a second switch while fading back in turns round from the current darkness
   f.step(10 * D);
   expect(f.busy()).toBe(false);
 });
+
+test("a switch long after a fade ended, before any step cleared it, swaps to the new target once", () => {
+  // a hidden tab: the fade passed its midpoint, then no frames ran until the next switch arrived
+  const f = createFader();
+  f.start("space", 0);
+  expect(f.step(D / 2 + 10).swap).toBe("space");
+  f.start("underwater", 10 * D);
+  const swaps: string[] = [];
+  for (let now = 10 * D; now <= 12 * D; now += 16) {
+    const { swap, alpha } = f.step(now);
+    expect(alpha).toBeGreaterThanOrEqual(0);
+    if (swap !== null) swaps.push(swap);
+  }
+  expect(swaps).toEqual(["underwater"]);
+  expect(f.busy()).toBe(false);
+});
+
+test("a fade never stepped and then retargeted long after its end ends on the new target", () => {
+  const f = createFader();
+  f.start("space", 0);
+  f.start("underwater", 10 * D);
+  const swaps: string[] = [];
+  for (let now = 10 * D; now <= 12 * D; now += 16) { const { swap } = f.step(now); if (swap !== null) swaps.push(swap); }
+  expect(swaps.at(-1)).toBe("underwater");
+  expect(f.busy()).toBe(false);
+});
+
+test("a step before the fade's start (clock skew) neither swaps nor shows the overlay", () => {
+  const f = createFader();
+  f.start("space", 1000);
+  expect(f.step(500)).toEqual({ alpha: 0, swap: null });
+  expect(f.step(1000 + D / 2).swap).toBe("space");
+});
+
+test("cancel drops a running fade", () => {
+  const f = createFader();
+  f.start("space", 0);
+  f.cancel();
+  expect(f.busy()).toBe(false);
+  expect(f.step(D / 2)).toEqual({ alpha: 0, swap: null });
+});

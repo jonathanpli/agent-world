@@ -13,6 +13,8 @@ export type Fader = {
   /** The overlay alpha now, and the theme to swap to: exactly once per fade, on the first step at or past the midpoint. */
   step(nowMs: number): { alpha: number; swap: string | null };
   busy(): boolean;
+  /** Drops any running fade, without a swap. */
+  cancel(): void;
 };
 
 export function createFader(durationMs: number = CONFIG.client.fadeMs): Fader {
@@ -20,18 +22,21 @@ export function createFader(durationMs: number = CONFIG.client.fadeMs): Fader {
   const half = durationMs / 2;
   return {
     start(target, nowMs) {
-      if (fade === null) fade = { startMs: nowMs, target, swapped: false };
+      // a fade past its end counts as over even if no step has cleared it yet (frames stop in a hidden tab)
+      const elapsed = fade === null ? durationMs : Math.max(0, nowMs - fade.startMs);
+      if (fade === null || elapsed >= durationMs) fade = { startMs: nowMs, target, swapped: false };
       else if (!fade.swapped) fade.target = target;
-      else fade = { startMs: nowMs - (durationMs - (nowMs - fade.startMs)), target, swapped: false };
+      else fade = { startMs: nowMs - (durationMs - elapsed), target, swapped: false };
     },
     step(nowMs) {
       if (fade === null) return { alpha: 0, swap: null };
-      const elapsed = nowMs - fade.startMs;
+      const elapsed = Math.max(0, nowMs - fade.startMs);
       let swap: string | null = null;
       if (!fade.swapped && elapsed >= half) { fade.swapped = true; swap = fade.target; }
       if (elapsed >= durationMs) fade = null;
       return { alpha: fadeAlpha(elapsed, durationMs), swap };
     },
     busy: () => fade !== null,
+    cancel: () => { fade = null; },
   };
 }

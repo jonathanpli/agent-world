@@ -26,13 +26,25 @@ function aura(ctx: Ctx, at: Point, effort: Effort, frame: number): void {
   }
 }
 
-/** Flames under the pack: a short puff to steer, or a roaring overclocked burn at max effort. */
-function thrust(ctx: Ctx, at: Point, frame: number, power: number): void {
-  for (const x of [-6, 4]) {
+/** Jetpack nozzles (tiers 3 and 4) and the ankle boosters clipped on lower tiers for a max-effort burn. */
+const PACK_JETS = { xs: [-6, 4], y: -3 } as const;
+const BOOT_JETS = { xs: [-4, 2], y: -2 } as const;
+
+/** Flames from the jets: a short puff to steer, or a roaring overclocked burn at max effort. */
+function thrust(ctx: Ctx, at: Point, frame: number, power: number, jets: { xs: readonly number[]; y: number } = PACK_JETS): void {
+  for (const x of jets.xs) {
     for (let i = 0; i < power; i++) {
       const flicker = (frame + i + x) % 3 === 0 ? 1 : 0;
-      rect(ctx, at.x + x + (i > 1 ? 1 : 0) - flicker, at.y - 3 + i * 2, 2 - (i > 2 ? 1 : 0), 2, S.flame[Math.min(S.flame.length - 1, Math.floor(i / 2))]!);
+      rect(ctx, at.x + x + (i > 1 ? 1 : 0) - flicker, at.y + jets.y + i * 2, 2 - (i > 2 ? 1 : 0), 2, S.flame[Math.min(S.flame.length - 1, Math.floor(i / 2))]!);
     }
+  }
+}
+
+/** Booster cuffs strapped round the ankles, so a junior's overclocked burn has somewhere to come from. */
+function boosters(ctx: Ctx, at: Point): void {
+  for (const x of BOOT_JETS.xs) {
+    rect(ctx, at.x + x - 1, at.y - 6, 4, 4, SPACE.ink);
+    rect(ctx, at.x + x, at.y - 5, 2, 2, S.packD); rect(ctx, at.x + x, at.y - 5, 2, 1, S.pack);
   }
 }
 
@@ -106,9 +118,10 @@ function drawCharacter(ctx: Ctx, at: Point, look: Look, tier: Tier, state: CharS
   if (tier === 4) drone(ctx, at, frame, false);
   if (state === "idle" && !moving) tether(ctx, at, frame);
   if (moving) { puff(ctx, at, facing, frame); if (tier === 3) thrust(ctx, at, frame, 2); }
-  if (overclocked) thrust(ctx, at, frame, 5);
+  if (overclocked) thrust(ctx, at, frame, 5, tier >= 3 ? PACK_JETS : BOOT_JETS);
   const shake = overclocked ? ((frame % 2) * 2 - 1) : 0;
   drawBase(ctx, { x: at.x + shake, y: at.y }, look, pose, frame, facing, { costume: suitFor(tier) });
+  if (overclocked && tier < 3) boosters(ctx, { x: at.x + shake, y: at.y });
   if (pose === "sit_type") wrench(ctx, at, frame);
   if (state === "done" && !moving) flag(ctx, at, look.body, frame);
   if (state === "off_duty" && !moving && pose === "stand") pouch(ctx, at, facing);

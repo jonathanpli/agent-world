@@ -224,7 +224,7 @@ export function startEngine(canvas: HTMLCanvasElement, state: ClientState): Engi
     select,
     onSelect: selection.onSelect,
     setTheme: (id, opts) => {
-      if (opts?.instant === true) { theme = getTheme(id); return; }
+      if (opts?.instant === true) { fader.cancel(); theme = getTheme(id); return; }
       if (!fader.busy() && getTheme(id) === theme) return;
       fader.start(id, performance.now());
     },
