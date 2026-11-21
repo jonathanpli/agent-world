@@ -74,15 +74,15 @@ All five work in the office, space and underwater worlds and in demo mode. A sou
 
 Each session shows how full its context window is: a thin bar under the name in the roster, a line on the inspector's Now tab ("Context 143k of 200k (72%, estimated) · 2 compactions this session"), and a gauge at the character's work spot. The gauge is a paper stack on the desk in the office, an oxygen tank readout in space and an air gauge on the tank underwater. In the office the paper stack grows as context fills; in space and underwater the gauge empties, as oxygen or air runs low. At or above the warning threshold it blinks slowly. Gauges (like sidekicks and tool actions) appear once the character has arrived at its work spot.
 
-When context first reaches the threshold (Settings, "Warn at context %", default 80, range 50 to 95) you get one "running low" toast and, if enabled, a system notification ("Context running low" in Settings turns both off). It is information only: it does not mark the agent as needing you, change its state or the roster order, or touch the tab title count. It re-arms after a compaction, or when context falls 10 points below the threshold. A compaction shows a short animation at the work spot and a line in the ticker (on that page only, no toast); it earns no XP.
+When context first reaches the threshold (Settings, "Warn at context %", default 80, range 50 to 95) you get one "running low" toast and, if enabled, a system notification ("Context running low" in Settings turns both off). It is information only: it does not mark the agent as needing you, change its state or the roster order, or touch the tab title count. It re-arms after a compaction, or when the token count falls to more than 10 points below the threshold; a limit that steps up (below) never re-arms it, so a large-window model gets one notice per fill. Changing the override or the threshold applies to running sessions at once, without a notice. A compaction shows a short animation at the work spot and a line in the ticker (on that page only, no toast); it earns no XP.
 
 **The limit is an estimate.** Claude Code does not report a window size, so Agent World works it out per session:
 
-1. the override in Settings ("Context limit override", in tokens; empty means estimate), if set;
-2. otherwise the largest size at which an automatic compaction was seen for that model id (learned, kept in the data directory);
+1. the override in Settings ("Context limit override", in tokens, at least 10 000; empty means estimate), if set;
+2. otherwise the size at which the most recent automatic compaction was seen for that model id (learned, kept in the data directory; a later one replaces it, lower or higher);
 3. otherwise 200 000.
 
-If a session is ever seen above its limit, the limit steps up to 500 000 or 1 000 000, whichever is the first at or above what was seen, and stays there for that session. The inspector says "estimated" for any limit that is not your override.
+If a session is ever seen above its limit, the limit steps up to 500 000 or 1 000 000, whichever is the first at or above what was seen, and stays there for that session. The inspector says "estimated" for any limit that is not your override. Token counts read as 950, 143k, 1M or 1.2M, the same in the inspector and in compaction lines (999 600 is "1M", never "1000k").
 
 **What is read from your transcripts.** Agent World already read the tail of each session's transcript file to find the model. It now takes the token counts of the latest main-thread reply and any compaction markers from that same tail read (at most one read per session every 2 seconds). Only token counts and model ids are used; no message text from the transcript is read into the app or stored. Subagent entries in the transcript are skipped.
 
@@ -96,7 +96,7 @@ The character's pose follows the kind of tool it just used for about 2.5 seconds
 
 ### Socialising
 
-Characters that are not working wander to the lounge and chat, with speech bubbles holding small icons: every 20 to 60 seconds, for 6 to 10 seconds, at most two chats at once. Only characters whose desk is on the first screen, and off-duty characters, join. An agent that is working or waiting on you never leaves its spot, and a chat breaks off at once if one of the pair starts working. When a neighbour in the same place finishes a task or levels up, others clap or cheer for a moment; one that is waiting on you never joins a cheer. This is decoration only; it changes no game state.
+Characters that are not working wander to the lounge and chat, with speech bubbles holding small icons: every 20 to 60 seconds, for 6 to 10 seconds, at most two chats at once. Only characters whose desk is on the first screen, and off-duty characters, join; the character you have selected, and characters that still need your attention, do not. An agent that is working or waiting on you never leaves its spot, and a chat breaks off at once if one of the pair starts working. When a neighbour in the same place finishes a task or levels up, others clap or cheer for a moment; one that is waiting on you never joins a cheer. This is decoration only; it changes no game state.
 
 ### Daily recap
 
