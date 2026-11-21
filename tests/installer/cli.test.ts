@@ -1,5 +1,5 @@
 import { spawnSync } from "node:child_process";
-import { copyFileSync, existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, chmodSync, writeFileSync } from "node:fs";
+import { copyFileSync, lstatSync, mkdirSync, symlinkSync, existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, chmodSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { afterEach, beforeEach, expect, test } from "vitest";
@@ -112,4 +112,67 @@ test("unknown command or missing --settings value exits 1 without touching anyth
   expect(spawnSync(process.execPath, [TSX, SCRIPT, "bogus", "--settings", join(dir, "s.json")], { env: { ...process.env, HOME: dir }, encoding: "utf8" }).status).toBe(1);
   expect(spawnSync(process.execPath, [TSX, SCRIPT, "install", "--settings"], { env: { ...process.env, HOME: dir }, encoding: "utf8" }).status).toBe(1);
   expect(readdirSync(dir)).toEqual([]);
+});
+
+test("a symlinked settings file stays a symlink and the target gets the merge", () => {
+  const other = mkdtempSync(join(tmpdir(), "aw-target-"));
+  try {
+    const real = join(other, "real.json");
+    copyFileSync("tests/fixtures/settings/existing-hooks.json", real);
+    const link = join(dir, "settings.json");
+    symlinkSync(real, link);
+    const r = run("install", link);
+    expect(r.status).toBe(0);
+    expect(lstatSync(link).isSymbolicLink()).toBe(true);
+    expect(JSON.parse(readFileSync(real, "utf8")).hooks.Stop).toHaveLength(1);
+    expect(readdirSync(other).filter(n => n.includes(".agent-world-backup-"))).toHaveLength(1);
+    expect(backups()).toEqual([]);
+  } finally { rmSync(other, { recursive: true, force: true }); }
+});
+
+test("a dangling symlink aborts and is left unchanged", () => {
+  const link = join(dir, "settings.json");
+  symlinkSync(join(dir, "missing.json"), link);
+  const r = run("install", link);
+  expect(r.status).toBe(1);
+  expect(r.stdout + r.stderr).toContain("nothing was changed");
+  expect(lstatSync(link).isSymbolicLink()).toBe(true);
+  expect(readdirSync(dir)).toEqual(["settings.json"]);
+});
+
+test("install then uninstall back-to-back keeps two distinct backups, the first identical to the original", () => {
+  const f = copyFx("existing-hooks");
+  const original = readFileSync(f);
+  expect(run("install", f).status).toBe(0);
+  expect(run("uninstall", f).status).toBe(0);
+  const bs = backups().sort();
+  expect(bs).toHaveLength(2);
+  const contents = bs.map(b => readFileSync(join(dir, b)));
+  expect(contents.some(c => c.equals(original))).toBe(true);
+  expect(contents.some(c => !c.equals(original))).toBe(true);
+});
+
+test.each(['{"hooks":{}}', '{"hooks":{"Stop":[]}}'])("uninstall on %s writes nothing", text => {
+  const f = join(dir, "settings.json");
+  writeFileSync(f, text);
+  const r = run("uninstall", f);
+  expect(r.status).toBe(0);
+  expect(r.stdout).toContain("not installed");
+  expect(readFileSync(f, "utf8")).toBe(text);
+  expect(backups()).toEqual([]);
+});
+
+test("an fs failure prints one line and exits 1 without a stack trace", () => {
+  const sub = join(dir, "ro");
+  mkdirSync(sub);
+  const f = join(sub, "settings.json");
+  copyFileSync("tests/fixtures/settings/existing-hooks.json", f);
+  const before = readFileSync(f);
+  chmodSync(sub, 0o500);
+  try {
+    const r = run("install", f);
+    expect(r.status).toBe(1);
+    expect(r.stderr).toMatch(/^could not update .*settings\.json: .*; nothing was changed\n$/);
+    expect(readFileSync(f).equals(before)).toBe(true);
+  } finally { chmodSync(sub, 0o700); }
 });

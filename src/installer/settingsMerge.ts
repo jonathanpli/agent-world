@@ -41,21 +41,31 @@ export function mergeHooks(settings: Settings, scriptPath: string): Settings {
   return out;
 }
 
+/** Quotes a path for use as a shell command string; plain paths pass through unchanged. */
+export function shellQuote(path: string): string {
+  return /^[A-Za-z0-9_./@:+-]+$/.test(path) ? path : `'${path.replaceAll("'", "'\\''")}'`;
+}
+
 export function removeHooks(settings: Settings, scriptPath: string): Settings {
   const out = structuredClone(settings);
   if (out.hooks === undefined) return out;
   const hooks = hooksOf(out);
+  let removedAny = false;
   for (const event of HOOK_EVENTS) {
     const groups = groupsOf(hooks, event);
     if (!groups) continue;
+    let removed = false;
     const kept = groups.flatMap(g => {
       if (!commandsOf(g).includes(scriptPath)) return [g];
+      removed = true;
       const rest = ((g as Group).hooks as unknown[]).filter(h => !(isObject(h) && h.command === scriptPath));
       return rest.length > 0 ? [{ ...(g as object), hooks: rest }] : [];
     });
+    if (!removed) continue;
+    removedAny = true;
     if (kept.length > 0) hooks[event] = kept;
     else delete hooks[event];
   }
-  if (Object.keys(hooks).length === 0) delete out.hooks;
+  if (removedAny && Object.keys(hooks).length === 0) delete out.hooks;
   return out;
 }

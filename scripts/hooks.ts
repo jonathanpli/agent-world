@@ -1,12 +1,12 @@
-import { chmodSync, copyFileSync, existsSync, mkdirSync, readFileSync, renameSync, statSync, unlinkSync, writeFileSync } from "node:fs";
+import { chmodSync, constants, copyFileSync, lstatSync, realpathSync, mkdirSync, readFileSync, renameSync, statSync, unlinkSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { basename, dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { isDeepStrictEqual } from "node:util";
-import { HOOK_EVENTS, mergeHooks, removeHooks } from "../src/installer/settingsMerge";
+import { HOOK_EVENTS, mergeHooks, removeHooks, shellQuote } from "../src/installer/settingsMerge";
 
 const USAGE = "usage: hooks.ts install|uninstall [--settings <path>]";
-const SCRIPT_PATH = resolve(dirname(fileURLToPath(import.meta.url)), "../hooks/forward.sh");
+const SCRIPT_PATH = shellQuote(realpathSync(resolve(dirname(fileURLToPath(import.meta.url)), "../hooks/forward.sh")));
 
 function fail(msg: string): never {
   console.error(msg);
@@ -31,8 +31,34 @@ function stamp(d: Date): string {
   return `${d.getFullYear()}${pad(d.getMonth() + 1)}${pad(d.getDate())}-${pad(d.getHours())}${pad(d.getMinutes())}${pad(d.getSeconds())}`;
 }
 
+function exists(path: string): boolean {
+  try { lstatSync(path); return true; } catch { return false; }
+}
+
+/** Follows a symlinked settings file so the link itself is never replaced; a dangling link aborts. */
+function resolveTarget(path: string): string {
+  if (!exists(path) || !lstatSync(path).isSymbolicLink()) return path;
+  try {
+    return realpathSync(path);
+  } catch {
+    return fail(`${path} is a symlink to a missing file; nothing was changed`);
+  }
+}
+
+function backupTo(path: string, base: string): string {
+  for (let n = 0; ; n++) {
+    const candidate = n === 0 ? base : `${base}-${n}`;
+    try {
+      copyFileSync(path, candidate, constants.COPYFILE_EXCL);
+      return candidate;
+    } catch (e) {
+      if ((e as NodeJS.ErrnoException).code !== "EEXIST") throw e;
+    }
+  }
+}
+
 function readSettings(path: string): Record<string, unknown> | null {
-  if (!existsSync(path)) return null;
+  if (!exists(path)) return null;
   let parsed: unknown;
   try {
     parsed = JSON.parse(readFileSync(path, "utf8"));
@@ -56,8 +82,12 @@ function writeAtomic(path: string, text: string, mode: number | undefined): void
   }
 }
 
+let target = "settings file";
+
 function main(): void {
-  const { command, settings: path } = parseArgs(process.argv.slice(2));
+  const { command, settings: given } = parseArgs(process.argv.slice(2));
+  target = given;
+  const path = resolveTarget(given);
   const current = readSettings(path);
   let next: Record<string, unknown>;
   try {
@@ -78,7 +108,7 @@ function main(): void {
   if (current !== null) {
     mode = statSync(path).mode & 0o777;
     backup = `${path}.agent-world-backup-${stamp(new Date())}`;
-    copyFileSync(path, backup);
+    backup = backupTo(path, backup);
   }
   writeAtomic(path, `${JSON.stringify(next, null, 2)}\n`, mode);
   console.log(command === "install" ? `installed ${HOOK_EVENTS.length} hooks pointing at ${SCRIPT_PATH}` : `removed Agent World hooks (${SCRIPT_PATH})`);
@@ -86,4 +116,8 @@ function main(): void {
   console.log(backup ? `backup: ${backup}` : "no backup needed (file did not exist)");
 }
 
-main();
+try {
+  main();
+} catch (e) {
+  fail(`could not update ${target}: ${(e as Error).message}; nothing was changed`);
+}

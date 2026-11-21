@@ -36,3 +36,29 @@ test("delivers the payload when a server is listening", async () => {
   expect(bodies).toHaveLength(1);
   expect(bodies[0]).toEqual({ url: "/ingest/claude-code", method: "POST", type: "application/json", body: payload });
 });
+
+test("ignores proxy environment variables: payload goes to the target, nothing to a proxy", async () => {
+  let proxyHits = 0;
+  const proxy = createServer((_q, res) => { proxyHits++; res.end(); });
+  proxy.on("connection", () => { proxyHits++; });
+  await new Promise<void>(r => proxy.listen(0, "127.0.0.1", r));
+  const bodies: string[] = [];
+  server = createServer((req, res) => {
+    let b = "";
+    req.on("data", c => (b += c));
+    req.on("end", () => { bodies.push(b); res.end("ok"); });
+  });
+  await new Promise<void>(r => server!.listen(0, "127.0.0.1", r));
+  try {
+    const proxyUrl = `http://127.0.0.1:${(proxy.address() as AddressInfo).port}`;
+    const env = { ...process.env, AGENT_WORLD_PORT: String((server.address() as AddressInfo).port), http_proxy: proxyUrl, HTTP_PROXY: proxyUrl, ALL_PROXY: proxyUrl, all_proxy: proxyUrl, NO_PROXY: "", no_proxy: "" };
+    const child = spawn("sh", ["hooks/forward.sh"], { env, stdio: ["pipe", "ignore", "ignore"] });
+    child.stdin.end("{}");
+    const deadline = Date.now() + 2000;
+    while (bodies.length === 0 && Date.now() < deadline) await new Promise(r => setTimeout(r, 20));
+    expect(bodies).toEqual(["{}"]);
+    expect(proxyHits).toBe(0);
+  } finally {
+    await new Promise<void>(r => { proxy.close(() => r()); proxy.closeAllConnections(); });
+  }
+});
