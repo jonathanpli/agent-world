@@ -4,7 +4,7 @@ A local browser idle game that shows your Claude Code agents as pixel-art charac
 
 ## Requirements
 
-Node 22 (`.nvmrc`; run `nvm use`).
+Node 22.13 or newer (`.nvmrc`; run `nvm use`). The server stops with a message on older versions.
 
 ## Quick start
 
@@ -13,7 +13,7 @@ npm install
 npm run dev:demo
 ```
 
-Demo mode runs a simulator with fake sessions on port 4318 (Vite dev client on its own port, printed on start). It uses `demo.db`, separate from your real data.
+Demo mode runs a simulator with fake sessions on port 4318 (Vite dev client on its own port, printed on start). It uses `demo.db`, separate from your real data. Each demo start (and each restart of the watched server) ends the sessions the previous run left behind, so the simulator starts fresh while the characters stay.
 
 ## Real use
 
@@ -21,6 +21,7 @@ Demo mode runs a simulator with fake sessions on port 4318 (Vite dev client on i
 npm start                 # builds the client, then serves everything at http://127.0.0.1:4317
 npm run hooks:install     # points Claude Code's hooks at this app
 npm run hooks:uninstall   # removes them again
+npm run dev               # while working on Agent World itself: watched server on 4317 plus the Vite dev client
 ```
 
 `hooks:install` edits `~/.claude/settings.json`:
@@ -33,6 +34,18 @@ npm run hooks:uninstall   # removes them again
 
 The hook script posts each payload to `http://127.0.0.1:4317/ingest/claude-code` with a 1 second limit, prints nothing and always exits 0, so it cannot slow or break an agent. It works whether or not the app is running. Start new Claude Code sessions after installing.
 
+The installed hooks point at this checkout's absolute path, and `hooks:uninstall` removes only entries with the path of the checkout it runs from. Before you move or rename the repository, run `npm run hooks:uninstall`; then run `npm run hooks:install` from the new location. If you already moved it, run `hooks:uninstall` from a checkout at the old path (or delete the old `forward.sh` entries from `~/.claude/settings.json` by hand), then install again.
+
+## Playing
+
+- Click a character (or a roster row) to open the inspector: Now (state, task, activity), Look, History and Achievements. Opening it acknowledges a "needs you" or "finished" marker.
+- A new session shows as "Arriving" until its model is known (see below), then joins the roster with its own character.
+- The roster cap (Settings, default 12, up to 50) limits how many named characters exist. Past it, extra sessions show as temps ("Temp"): a random look and no XP. Retire a character (Look tab) to free a place.
+- A session whose terminal was killed never sends SessionEnd, so its character would stay at its desk for 12 hours. Use **Dismiss session…** on the inspector's Now tab to end it as if it had closed.
+- Notices (needs you, finished, level up) show as toasts over the stage and in the ticker at the bottom; click a toast to select the character.
+- System notifications are off until you allow them: open Settings (⚙) and click "Enable notifications", then grant the browser's permission prompt. The "Notify when an agent needs you / finishes" toggles control them (and the matching toasts); "Chime" adds a sound.
+- Claude Code sends an `idle_prompt` notification about a minute after a session stops waiting; for a session that has finished or is idle it is only logged in the activity list, not shown as "needs you".
+
 ## Seniority and effort
 
 Model decides a character's tier (its seniority), set from the model id:
@@ -40,11 +53,11 @@ Model decides a character's tier (its seniority), set from the model id:
 | Tier | Model id contains | Office | Space | Underwater |
 |---|---|---|---|---|
 | 1 | `haiku` | Junior | Cadet | Snorkeler |
-| 2 | `sonnet` (also unknown models) | Engineer | Specialist | Diver |
+| 2 | `sonnet` (also any other model id) | Engineer | Specialist | Diver |
 | 3 | `opus` | Senior | Commander | Tech Diver |
 | 4 | `fable`, `mythos` | Principal | Admiral | Master Diver |
 
-Claude Code does not report the model when a session starts, so Agent World reads it from the session transcript once the model has replied. Until then the session shows as "Arriving", with no tier title, and holds the XP it earns. It joins the roster at its tier as soon as the model is known, and the held XP is credited then. If the model is still unknown 15 seconds after the session's first prompt (or its first event, for a session already running when Agent World started), it joins at tier 2. A session waiting for its first prompt waits as long as it takes. A session that ends while arriving joins at tier 2 if it earned anything; if it earned nothing, it leaves without adding a character.
+A model id that matches none of these joins at tier 2 at once. Claude Code does not report the model when a session starts, so Agent World reads it from the session transcript once the model has replied. Until then the session shows as "Arriving", with no tier title, and holds the XP it earns. It joins the roster at its tier as soon as the model is known, and the held XP is credited then. If the model is still unknown 15 seconds after the session's first prompt (or its first event, for a session already running when Agent World started), it joins at tier 2. A session waiting for its first prompt waits as long as it takes. A session that ends while arriving joins at tier 2 if it earned anything; if it earned nothing, it leaves without adding a character.
 
 Tier shows in the costume, the work spot, the name plate and the roster. It does not change XP; level is separate. The reported effort (`low`, `medium`, `high`, `xhigh`, `max`) shows as how intensely a working character animates.
 
@@ -54,7 +67,7 @@ Three themes ship: office, space and underwater. Switch in the settings panel; t
 
 Everything stays on your machine. The server binds to `127.0.0.1` only, makes no outside network requests and sends no telemetry.
 
-Data lives in `~/.agent-world/` (`world.db`, and `demo.db` in demo mode). It holds characters, repos, sessions and events. Prompt text (first 500 characters) and tool summaries (file path or the first 80 characters of a command) are stored in plain text in that database. Events are pruned after 30 days. Delete the directory to start over.
+Data lives in `~/.agent-world/` (`world.db`, and `demo.db` in demo mode). It holds characters, repos, sessions and events. Stored in plain text in that database: prompt text (first 500 characters), the last assistant message of each finished turn (first 500 characters), notification messages (such as "Claude needs your permission to use Bash"), and tool summaries (file path or the first 80 characters of a command). The directory is created readable only by you (0700) and the database file 0600. Events are pruned after 30 days. Delete the directory to start over.
 
 ## Environment variables
 
