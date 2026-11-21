@@ -33,4 +33,16 @@ export const SEA = {
   aura: { xhigh: "#bff6ff", max: "#ffffff" },
   coins: ["#ffd23f", "#fff3b0", "#f2c230"],
   sparkle: ["#ffe066", "#fff3b0", "#bff6ff", "#ffffff"],
+  // tool actions, the pilot fish, the air gauge
+  slate: { c: "#eef4f0", rim: "#ff8a3c", rimD: "#c9602a", lead: "#3a4656", pencil: "#ffd23f", cord: "#e0c890" },
+  valve: { wheel: "#e0503c", wheelL: "#ff9a80", hub: "#c9a24a", pipe: "#8f96a3", pipeL: "#c9ced8", pipeD: "#5a6070" },
+  sonar: { puck: "#3a3f4a", lamp: "#ffd23f", ring: "#8ff0d0", echo: "#ff6b6b" },
+  signal: { glove: "#ffd23f", gloveS: "#c99a1e", trail: "#d8f6ff" },
+  murk: { c: "#8a7a4a", d: "#5a5236", l: "#b8a878", silt: "#6a6444" },
+  pilot: { c: "#d8e4f0", s: "#8fa4bc", belly: "#f4f8fc", band: "#2a3550", fin: "#5a6f8a", eye: "#0f2033", busy: "#ff6b6b" },
+  air: {
+    tank: "#c9ced8", tankS: "#8f96a3", tankL: "#eef1f6", valve: "#3a3f4a", rim: "#2a2f3a", face: "#f4f8fa", off: "#9aa4b0",
+    segs: ["#e8443a", "#f2902e", "#f2d23a", "#5cc85a"], needle: "#0f2033", hot: "#ff3a2e",
+  },
+  coralHead: { c: "#d9706a", d: "#a84a4a", l: "#ffb0a0", polyp: "#fff0d8" },
 } as const;

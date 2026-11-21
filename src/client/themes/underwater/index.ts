@@ -3,6 +3,7 @@ import { placeOnGrid } from "../../engine/grid";
 import { ellipse, rect } from "../../engine/pixels";
 import { drawBase, drawBaseTurned, poseFor } from "../../engine/sprite";
 import type { Ctx, Particle, Place, Point, Theme } from "../../engine/theme";
+import { drawAction, drawCompaction, drawContextGauge, drawSidekick, socialSpots } from "./extras";
 import { gearFor } from "./gear";
 import { SEA } from "./palette";
 import { AREA, bubble, drawAmbient, drawBackdrop, drawPlace, LOUNGE, PLACE } from "./scenery";
@@ -115,4 +116,9 @@ export const underwater: Theme = {
   drawCharacter,
   effects: { celebrate, levelUp },
   drawAmbient,
+  drawAction,
+  drawSidekick,
+  drawContextGauge,
+  drawCompaction,
+  socialSpots,
 };

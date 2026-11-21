@@ -11,6 +11,8 @@ export const LOUNGE: Rect = { x: 398, y: 80, w: 70, h: 166 };
 export const AREA: Rect = { x: 4, y: 38, w: 380, h: 228 };
 export const PLACE = { label: 9, row0: 55, rowH: 48, maxW: 186, maxH: 108, gap: 8 } as const;
 const SAND_Y = 254;
+/** The coral head in the open water where off-duty divers meet: its foot on the sand. */
+export const CORAL_HEAD = { x: 443, y: SAND_Y } as const;
 
 const wrap = (v: number, m: number): number => ((v % m) + m) % m;
 
@@ -106,10 +108,25 @@ function openWater(ctx: Ctx, t: number): void {
   rect(ctx, 428, SAND_Y - 33, 7, 5, A); rect(ctx, 430, SAND_Y - 32, 3, 3, SEA.water[4]!);
   rect(ctx, 418, SAND_Y - 6, 14, 2, A); rect(ctx, 416, SAND_Y - 9, 2, 4, A); rect(ctx, 432, SAND_Y - 9, 2, 4, A);
   rect(ctx, 421, SAND_Y - 24, 12, 2, A);
+  coralHead(ctx, t);
   // giant clam
   ellipse(ctx, 456, SAND_Y - 2, 9, 4, "#7a6aa8"); ellipse(ctx, 456, SAND_Y - 4, 7, 2, "#b0a0e0");
   const open = Math.sin(t * 0.6) > 0.4;
   if (open) { rect(ctx, 454, SAND_Y - 5, 4, 2, "#ffffff"); rect(ctx, 455, SAND_Y - 5, 1, 1, "#fff6d8"); }
+}
+
+/** A rounded coral head on the sand, grooved like a brain coral, with two branches and polyps waving on top. */
+function coralHead(ctx: Ctx, t: number): void {
+  const K = SEA.coralHead, { x, y } = CORAL_HEAD;
+  for (const [dx, h, lean] of [[-5, 9, -1], [4, 11, 1]] as const) {                 // branches behind the mound
+    const sway = Math.round(Math.sin(t * 1.1 + dx) * 0.7);
+    for (let i = 0; i < h; i++) rect(ctx, x + dx + Math.round((lean * i) / 4) + (i > h / 2 ? sway : 0), y - 10 - i, 2, 1, i > h - 2 ? K.l : K.c);
+  }
+  ellipse(ctx, x, y - 6, 11, 8, SEA.ink);
+  ellipse(ctx, x, y - 6, 10, 7, K.c);
+  for (let i = -7; i <= 7; i += 3) rect(ctx, x + i, y - 11 + (i % 2 === 0 ? 0 : 1), 1, 9 - Math.abs(i) / 2, K.d);
+  rect(ctx, x - 6, y - 13, 9, 1, K.l); rect(ctx, x - 8, y - 11, 2, 1, K.l);
+  for (let i = 0; i < 5; i++) if (Math.floor(t * 2 + i * 1.7) % 3 !== 0) rect(ctx, x - 8 + i * 4, y - 13 + (i % 2), 1, 1, K.polyp);
 }
 
 /** Screens past the first have the bow of an old wreck where the open water would be. */
