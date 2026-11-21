@@ -1,5 +1,5 @@
 import { CONFIG } from "../shared/config";
-import type { AgentEvent, Effort, Tier } from "../shared/types";
+import type { AgentEvent, Effort, Tier, ToolKind } from "../shared/types";
 import type { Adapter } from "./index";
 
 const EFFORTS: readonly string[] = ["low", "medium", "high", "xhigh", "max"];
@@ -17,6 +17,16 @@ export function tierForModel(model: string | undefined): Tier | undefined {
 
 const isRecord = (v: unknown): v is Record<string, unknown> => typeof v === "object" && v !== null && !Array.isArray(v);
 const str = (v: unknown): string | undefined => (typeof v === "string" ? v : undefined);
+
+const TOOL_KINDS: Readonly<Record<string, ToolKind>> = {
+  Edit: "edit", Write: "edit", NotebookEdit: "edit", Bash: "shell", Read: "read", Grep: "read", Glob: "read",
+  WebSearch: "web", WebFetch: "web", Agent: "delegate", Task: "delegate",
+};
+
+/** The animation family of a tool; anything unrecognised (MCP tools included) is "other". */
+export function toolKindFor(name: string): ToolKind {
+  return Object.hasOwn(TOOL_KINDS, name) ? TOOL_KINDS[name] : "other";
+}
 
 function toolSummary(name: string, input: unknown): string {
   const i = isRecord(input) ? input : {};
@@ -49,9 +59,23 @@ function parse(raw: unknown, now: number): AgentEvent[] {
       }
       case "UserPromptSubmit":
         return ev("prompt", {}, { text: (str(raw.prompt) ?? "").slice(0, CONFIG.textMax) });
-      case "PostToolUse": {
+      case "PostToolUse":
+      case "PostToolUseFailure": {
+        const failure = raw.hook_event_name === "PostToolUseFailure";
+        if (failure && raw.is_interrupt === true) return [];
         const tool = str(raw.tool_name) ?? "";
-        return ev("tool", { ...(effort && { effort }) }, { tool, summary: toolSummary(tool, raw.tool_input) });
+        const agentId = str(raw.agent_id);
+        const agentType = str(raw.agent_type);
+        const inSub = agentId !== undefined && agentId !== "" && agentType !== undefined && agentType !== "";
+        return ev("tool", { ...(effort && { effort }), ...(failure && { failed: true as const }) },
+          { tool, summary: toolSummary(tool, raw.tool_input), toolKind: toolKindFor(tool), ...(inSub && { agentId, agentType }) });
+      }
+      case "SubagentStart":
+      case "SubagentStop": {
+        const agentId = str(raw.agent_id);
+        const agentType = str(raw.agent_type);
+        if (!agentId || !agentType) return [];
+        return ev(raw.hook_event_name === "SubagentStart" ? "sub_start" : "sub_end", {}, { agentId, agentType });
       }
       case "Notification": {
         const type = str(raw.notification_type);

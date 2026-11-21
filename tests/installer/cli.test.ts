@@ -21,7 +21,7 @@ test("missing file is created", () => {
   const f = join(dir, "settings.json");
   const r = run("install", f);
   expect(r.status).toBe(0);
-  expect(Object.keys(JSON.parse(readFileSync(f, "utf8")).hooks)).toHaveLength(7);
+  expect(Object.keys(JSON.parse(readFileSync(f, "utf8")).hooks)).toHaveLength(12);
   expect(readFileSync(f, "utf8").endsWith("}\n")).toBe(true);
   expect(readFileSync(f, "utf8")).toContain(FORWARD);
   expect(backups()).toEqual([]);

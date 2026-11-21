@@ -6,7 +6,7 @@ OUT="${1:-$(mktemp -d)}"
 mkdir -p "$OUT"
 TMP="$(mktemp -d)"
 TMP_SETTINGS="$TMP/settings.json"
-EVENTS="SessionStart UserPromptSubmit PostToolUse Notification Stop PostModelSwitch SessionEnd"
+EVENTS="SessionStart UserPromptSubmit PostToolUse Notification Stop PostModelSwitch SessionEnd SubagentStart SubagentStop PostToolUseFailure PreCompact PostCompact"
 {
   echo '{"hooks":{'
   first=1

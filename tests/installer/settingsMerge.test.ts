@@ -5,10 +5,22 @@ import { HOOK_EVENTS, mergeHooks, removeHooks, shellQuote } from "../../src/inst
 const S = "/x/hooks/forward.sh";
 const fx = (n: string): any => JSON.parse(readFileSync(`tests/fixtures/settings/${n}.json`, "utf8"));
 
-test("adds all seven events to empty settings", () => {
+test("adds all twelve events to empty settings", () => {
   const out = mergeHooks({}, S) as any;
   expect(Object.keys(out.hooks).sort()).toEqual([...HOOK_EVENTS].sort());
   expect(out.hooks.Stop[0].hooks[0]).toEqual({ type: "command", command: S, timeout: 5 });
+});
+
+test("HOOK_EVENTS is exactly the twelve, in order", () => {
+  expect([...HOOK_EVENTS]).toEqual(["SessionStart", "UserPromptSubmit", "PostToolUse", "Notification", "Stop", "PostModelSwitch", "SessionEnd",
+    "SubagentStart", "SubagentStop", "PostToolUseFailure", "PreCompact", "PostCompact"]);
+});
+
+test("merging into existing-hooks adds an entry for each event; uninstall leaves foreign hooks byte-identical", () => {
+  const before = fx("existing-hooks");
+  const out = mergeHooks(before, S) as any;
+  for (const e of HOOK_EVENTS) expect(out.hooks[e].some((g: any) => g.hooks.some((h: any) => h.command === S))).toBe(true);
+  expect(JSON.stringify(removeHooks(out, S))).toBe(JSON.stringify(before));
 });
 
 test("keeps existing hooks and other keys (the owner's real shape)", () => {

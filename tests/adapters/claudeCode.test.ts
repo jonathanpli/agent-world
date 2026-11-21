@@ -1,6 +1,6 @@
 import { readFileSync } from "node:fs";
 import { describe, expect, test } from "vitest";
-import { claudeCode, tierForModel } from "../../src/adapters/claudeCode";
+import { claudeCode, tierForModel, toolKindFor } from "../../src/adapters/claudeCode";
 import { ADAPTERS } from "../../src/adapters";
 
 const fx = (name: string) => JSON.parse(readFileSync(`tests/fixtures/claude-code/${name}.json`, "utf8"));
@@ -49,5 +49,42 @@ describe("claudeCode adapter", () => {
     const [first] = claudeCode.parse({ ...fx("Stop"), stop_hook_active: false }, 0);
     expect(first!.kind).toBe("task_done");
     expect(first!.repeat).toBeUndefined();
+  });
+
+  test("SubagentStart and SubagentStop", () => {
+    for (const [name, kind] of [["SubagentStart", "sub_start"], ["SubagentStop", "sub_end"]] as const) {
+      const f = fx(name);
+      const out = claudeCode.parse(f, 0);
+      expect(out).toHaveLength(1);
+      expect(out[0]).toMatchObject({ kind, sessionId: f.session_id, detail: { agentId: "a5b204f6cefc0d539", agentType: "general-purpose" } });
+      expect(claudeCode.parse({ ...f, agent_type: "" }, 0)).toEqual([]);
+      const { agent_id, ...noId } = f;
+      expect(claudeCode.parse(noId, 0)).toEqual([]);
+    }
+  });
+  test("tools inside a subagent carry its ids; the Agent tool is a delegate", () => {
+    const sub = claudeCode.parse(fx("PostToolUse.subagent"), 0)[0];
+    expect(sub).toMatchObject({ kind: "tool", detail: { toolKind: "shell", agentId: "a5b204f6cefc0d539", agentType: "general-purpose" } });
+    expect(sub.failed).toBeUndefined();
+    const del = claudeCode.parse(fx("PostToolUse.agentTool"), 0)[0];
+    expect(del.detail!.toolKind).toBe("delegate");
+    expect(del.detail!.agentId).toBeUndefined();
+  });
+  test("PostToolUseFailure is a failed tool unless interrupted", () => {
+    for (const [name, toolKind] of [["PostToolUseFailure.bash", "shell"], ["PostToolUseFailure.read", "read"]]) {
+      const f = fx(name);
+      const [e] = claudeCode.parse(f, 0);
+      expect(e).toMatchObject({ kind: "tool", failed: true, detail: { toolKind } });
+      expect(e.detail!.summary).toBe(claudeCode.parse({ ...f, hook_event_name: "PostToolUse" }, 0)[0].detail!.summary);
+      expect(claudeCode.parse({ ...f, is_interrupt: true }, 0)).toEqual([]);
+    }
+  });
+  test("PreCompact and PostCompact are read triggers only", () => {
+    for (const hook_event_name of ["PreCompact", "PostCompact"]) expect(claudeCode.parse({ hook_event_name, session_id: "s", cwd: "/r" }, 0)).toEqual([]);
+  });
+  test("toolKindFor", () => {
+    const k: [string, string][] = [["Edit", "edit"], ["Write", "edit"], ["NotebookEdit", "edit"], ["Bash", "shell"], ["Read", "read"], ["Grep", "read"], ["Glob", "read"],
+      ["WebSearch", "web"], ["WebFetch", "web"], ["Agent", "delegate"], ["Task", "delegate"], ["mcp__x__y", "other"], ["SubagentHandback", "other"], ["", "other"]];
+    for (const [n, kind] of k) expect(toolKindFor(n)).toBe(kind);
   });
 });

@@ -1,12 +1,17 @@
 export type Tier = 1 | 2 | 3 | 4;
 export type Effort = "low" | "medium" | "high" | "xhigh" | "max";
 export type CharState = "working" | "needs_input" | "done" | "idle" | "off_duty";
-export type EventKind = "session_start" | "prompt" | "tool" | "needs_input" | "task_done" | "model_change" | "session_end";
+export type ToolKind = "edit" | "shell" | "read" | "web" | "delegate" | "other";
+export type Compaction = { uuid: string; trigger: "auto" | "manual"; preTokens: number; postTokens: number };
+export type EventKind = "session_start" | "prompt" | "tool" | "needs_input" | "task_done" | "model_change" | "session_end" | "sub_start" | "sub_end" | "context";
 export type AgentEvent = {
   source: string; sessionId: string; repoPath: string; at: number; kind: EventKind;
   model?: string; tier?: Tier; effort?: Effort; detail?: Record<string, string>;
   inputKind?: "idle" | "blocking";   // needs_input: "idle" is a nudge after the agent stopped; unspecified means blocking
   repeat?: true;                     // task_done: the end of a continuation a blocking Stop hook forced (no XP, no notice)
+  failed?: true;                     // tool: a PostToolUseFailure that was not an interrupt
+  contextTokens?: number;            // context
+  boundaries?: Compaction[];         // context: every boundary found in the tail, oldest first
 };
 export type Look = { body: string; skin: string; hairStyle: number; hairColor: string; hat: string | null; accessory: string | null };
 export type Character = {

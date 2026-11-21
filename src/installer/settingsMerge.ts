@@ -1,6 +1,7 @@
 import { CONFIG } from "../shared/config";
 
-export const HOOK_EVENTS = ["SessionStart", "UserPromptSubmit", "PostToolUse", "Notification", "Stop", "PostModelSwitch", "SessionEnd"] as const;
+export const HOOK_EVENTS = ["SessionStart", "UserPromptSubmit", "PostToolUse", "Notification", "Stop", "PostModelSwitch", "SessionEnd",
+  "SubagentStart", "SubagentStop", "PostToolUseFailure", "PreCompact", "PostCompact"] as const;
 
 type Settings = Record<string, unknown>;
 type Group = { hooks?: unknown };
