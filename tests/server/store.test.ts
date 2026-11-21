@@ -10,8 +10,8 @@ import { openStore } from "../../src/server/store";
 import type { Session, Snapshot } from "../../src/shared/types";
 import { deps, ev, newWorld } from "../helpers/events";
 
-/** Sessions as the store reads them back: sidekicks and the last tool are not stored yet. */
-const unstored = (ss: Session[]): Session[] => ss.map(s => ({ ...s, sidekicks: [], lastTool: null }));
+/** Sessions as the store reads them back: sidekicks, the last tool and context are not stored yet. */
+const unstored = (ss: Session[]): Session[] => ss.map(s => ({ ...s, sidekicks: [], lastTool: null, context: null }));
 const reloaded = (snap: Snapshot): Snapshot => ({ ...snap, sessions: unstored(snap.sessions) });
 
 test("round trip through a real world (Review Focus 4)", () => {
@@ -67,6 +67,34 @@ test("settings default then persist", () => {
   const w = newWorld();
   store.persist(w.updateSettings({ theme: "space", sound: true }));
   expect(store.load().settings).toEqual({ ...CONFIG.defaultSettings, theme: "space", sound: true });
+  store.close();
+});
+
+test("context settings persist; rows saved before them load with the defaults", () => {
+  const store = openStore(":memory:");
+  store.persist(newWorld().updateSettings({ contextWarnPct: 90, contextLimitOverride: 400_000, notifyContext: false }));
+  expect(store.load().settings).toMatchObject({ contextWarnPct: 90, contextLimitOverride: 400_000, notifyContext: false });
+  store.persist(newWorld().updateSettings({ contextLimitOverride: null }));
+  expect(store.load().settings.contextLimitOverride).toBeNull();
+  store.close();
+
+  const dir = mkdtempSync(join(tmpdir(), "aw-")); const path = join(dir, "w.db");
+  const db = new DatabaseSync(path);
+  for (const m of MIGRATIONS) db.exec(m);
+  db.exec(`PRAGMA user_version = ${MIGRATIONS.length}`);
+  for (const k of ["theme", "notifyNeedsInput", "notifyDone", "sound", "rosterCap"] as const) {
+    db.prepare("INSERT INTO settings (key, value) VALUES (?, ?)").run(k, JSON.stringify({ ...CONFIG.defaultSettings, theme: "space" }[k]));
+  }
+  db.close();
+  const old = openStore(path);
+  expect(old.load().settings).toEqual({ ...CONFIG.defaultSettings, theme: "space" });
+  old.close();
+});
+
+test("learned_limit deltas are not stored yet; learned limits load empty", () => {
+  const store = openStore(":memory:");
+  expect(() => store.persist([{ type: "learned_limit", model: "m", limit: 180_000 }])).not.toThrow();
+  expect(store.load().learnedLimits).toEqual({});
   store.close();
 });
 
@@ -137,7 +165,7 @@ test("sessions saved before the arriving migration load as known with nothing he
   const store = openStore(path);
   const loaded = store.load().sessions[0]!;
   expect(loaded).toMatchObject({ key: "t:s1", tier: 3, tierKnown: true, pendingXp: 0, graceSince: null, sidekicks: [], lastTool: null });
-  expect(loaded.pendingStats).toEqual({ tasks: 0, tools: 0, compactions: 0, sidekicks: 0 });
+  expect(loaded.pendingStats).toEqual({ tasks: 0, tools: 0, compactions: 0, sidekicks: 0, failures: 0 });
   store.close();
 });
 

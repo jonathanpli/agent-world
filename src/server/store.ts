@@ -8,7 +8,7 @@ import { MIGRATIONS } from "./migrations";
 
 export type Store = {
   load(): WorldInit;                    // settings default to CONFIG.defaultSettings when absent
-  persist(deltas: Delta[]): void;       // one transaction; `notice` and `credit` deltas are not stored
+  persist(deltas: Delta[]): void;       // one transaction; `notice`, `credit` and (for now) `learned_limit` deltas are not stored
   logEvent(ev: AgentEvent): void;
   pruneEvents(olderThan: number): void;
   eventCount(): number;
@@ -19,6 +19,7 @@ type Row = Record<string, SQLInputValue>;
 
 /** Counters a row stored before they existed reads as 0. */
 const NO_STATS = { tasks: 0, tools: 0, compactions: 0, sidekicks: 0 };
+const NO_PENDING = { ...NO_STATS, failures: 0 };
 
 function migrate(db: DatabaseSync): void {
   const row = db.prepare("PRAGMA user_version").get() as { user_version: number };
@@ -123,15 +124,15 @@ export function openStore(path: string): Store {
       characterId: r.character_id as string | null, tempLook: r.temp_look === null ? null : JSON.parse(r.temp_look as string),
       repoId: r.repo_id as string, state: r.state as Session["state"], stateSince: r.state_since as number,
       model: r.model as string | null, tier: r.tier as Session["tier"], effort: r.effort as Session["effort"],
-      tierKnown: r.tier_known === 1, pendingXp: r.pending_xp as number, pendingStats: { ...NO_STATS, ...JSON.parse(r.pending_stats as string) },
+      tierKnown: r.tier_known === 1, pendingXp: r.pending_xp as number, pendingStats: { ...NO_PENDING, ...JSON.parse(r.pending_stats as string) },
       graceSince: r.grace_since as number | null,
       startedAt: r.started_at as number, lastEventAt: r.last_event_at as number, task: r.task as string | null,
       lastSummary: r.last_summary as string | null, attention: r.attention === 1, activity: JSON.parse(r.activity as string),
-      sidekicks: [], lastTool: null,   // not stored yet
+      sidekicks: [], lastTool: null, context: null,   // not stored yet
     }));
     const settings: Record<string, unknown> = { ...CONFIG.defaultSettings };
     for (const r of db.prepare("SELECT key, value FROM settings").all() as Row[]) settings[r.key as string] = JSON.parse(r.value as string);
-    return { characters, repos, sessions, settings: settings as Settings };
+    return { characters, repos, sessions, settings: settings as Settings, learnedLimits: {} };   // learned limits: not stored yet
   }
 
   function persist(deltas: Delta[]): void {
@@ -146,6 +147,7 @@ export function openStore(path: string): Store {
           case "settings": saveSettings(d.settings); break;
           case "notice": break;
           case "credit": break;
+          case "learned_limit": break;   // not stored yet
         }
       }
       db.exec("COMMIT");

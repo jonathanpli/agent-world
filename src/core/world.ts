@@ -1,12 +1,15 @@
 import { CONFIG } from "../shared/config";
 import { isValidLook } from "../shared/cosmetics";
-import type { AgentEvent, Character, Delta, Look, Notice, Repo, Session, Settings, Snapshot, Tier, ToolKind } from "../shared/types";
+import type { AgentEvent, Character, ContextInfo, Delta, Look, Notice, NoticeKind, Repo, Session, Settings, Snapshot, Tier, ToolKind } from "../shared/types";
 import { pickCharacter } from "./assign";
 import { earned, ACHIEVEMENTS } from "./achievements";
 import { levelForXp } from "./levels";
 import { randomLook, randomName } from "./names";
 
-export type WorldInit = { characters: Character[]; repos: Repo[]; sessions: Session[]; settings: Settings };
+export type WorldInit = {
+  characters: Character[]; repos: Repo[]; sessions: Session[]; settings: Settings;
+  learnedLimits: Record<string, number>;     // model id → context limit in tokens, learned from automatic compactions
+};
 export type WorldDeps = { rng: () => number; newId: () => string };
 export type World = {
   apply(ev: AgentEvent): Delta[];      // ev.repoPath is already the resolved repo root
@@ -22,21 +25,37 @@ const TEMP_NAME = "Temp";
 /** How notices name a session that is still waiting for its tier (and so has no character yet). */
 export const ARRIVAL_NAME = "A new arrival";
 const clone = <T>(x: T): T => structuredClone(x);
-const emptyStats = (): Session["pendingStats"] => ({ tasks: 0, tools: 0, compactions: 0, sidekicks: 0 });
+const emptyStats = (): Session["pendingStats"] => ({ tasks: 0, tools: 0, compactions: 0, sidekicks: 0, failures: 0 });
 const TOOL_KINDS: ReadonlySet<string> = new Set<ToolKind>(["edit", "shell", "read", "web", "delegate", "other"]);
 const toolKind = (k: string | undefined): ToolKind => (k !== undefined && TOOL_KINDS.has(k) ? k as ToolKind : "other");
+/** Tokens for an activity line: 180000 → "180k". */
+const kTokens = (n: number): string => (n < 1000 ? String(n) : `${Math.round(n / 1000)}k`);
+
+/**
+ * The limit a reading is measured against: the override if set, else the learned limit for the model, else the
+ * default; an estimated limit the reading exceeds moves to the first step above it (or to the reading itself).
+ */
+function contextLimit(tokens: number, override: number | null, learned: number | undefined): { limit: number; estimated: boolean } {
+  if (override !== null) return { limit: override, estimated: false };
+  const base = learned ?? CONFIG.context.defaultLimit;
+  if (tokens <= base) return { limit: base, estimated: true };
+  return { limit: CONFIG.context.steps.find(step => step > tokens) ?? tokens, estimated: true };
+}
+
+const sameContext = (a: ContextInfo, b: ContextInfo): boolean =>
+  a.tokens === b.tokens && a.limit === b.limit && a.estimated === b.estimated && a.compactions === b.compactions &&
+  a.warned === b.warned && a.seen.length === b.seen.length && a.seen.every((u, i) => u === b.seen[i]);
 
 export function createWorld(init: WorldInit, deps: WorldDeps): World {
   const characters = new Map(init.characters.map(c => [c.id, clone(c)]));
   const repos = new Map(init.repos.map(r => [r.id, clone(r)]));
   const sessions = new Map(init.sessions.map(s => [s.key, clone(s)]));
   let settings: Settings = clone(init.settings);
+  const learnedLimits = new Map(Object.entries(init.learnedLimits));
   /** `${sessionKey}|${noticeKind}` → time of the last notice emitted. Private, never in snapshots. */
   const lastNoticeAt = new Map<string, number>();
   /** sessionKey → current tool-XP minute window. Private, never in snapshots. */
   const toolWindow = new Map<string, { start: number; earned: number }>();
-  /** sessionKey → failed tools not yet credited (held while the tier is unknown). Private, never in snapshots. */
-  const pendingFailures = new Map<string, number>();
 
   const characterDelta = (c: Character): Delta => ({ type: "character", character: clone(c) });
   const sessionDelta = (s: Session): Delta => ({ type: "session", session: clone(s) });
@@ -66,7 +85,7 @@ export function createWorld(init: WorldInit, deps: WorldDeps): World {
         c = {
           id: deps.newId(), name: randomName(deps.rng, taken), tier: session.tier, look: randomLook(deps.rng),
           xp: 0, createdAt: at, lastActiveAt: at, retired: false, repoXp: {},
-          stats: emptyStats(), achievements: {},
+          stats: { tasks: 0, tools: 0, compactions: 0, sidekicks: 0 }, achievements: {},
         };
         characters.set(c.id, c);
         out.push(characterDelta(c));
@@ -91,7 +110,7 @@ export function createWorld(init: WorldInit, deps: WorldDeps): World {
       graceSince: ev.tier === undefined && ev.kind !== "session_start" ? ev.at : null,
       pendingXp: 0, pendingStats: emptyStats(),
       startedAt: ev.at, lastEventAt: ev.at, task: null, lastSummary: null, attention: false, activity: [],
-      sidekicks: [], lastTool: null,
+      sidekicks: [], lastTool: null, context: null,
     };
     sessions.set(key, session);
     if (session.tierKnown) assign(session, ev.at, out);
@@ -135,16 +154,75 @@ export function createWorld(init: WorldInit, deps: WorldDeps): World {
     if (s.state !== state) { s.state = state; s.stateSince = at; }
   }
 
+  /** A notice about session `s`, naming its character (or "Temp", or the arrival); `text` gets that name. */
+  function sessionNotice(s: Session, kind: NoticeKind, at: number, repo: Repo | undefined, text: (name: string) => string): Delta {
+    const c = s.characterId === null ? undefined : characters.get(s.characterId);
+    const name = c?.name ?? (s.tierKnown ? TEMP_NAME : ARRIVAL_NAME);
+    const n: Notice = { id: deps.newId(), at, kind, sessionKey: s.key, characterId: c?.id ?? null, characterName: name, repoName: repo?.name ?? null, text: text(name) };
+    return { type: "notice", notice: n };
+  }
+
   function notice(s: Session, kind: "needs_input" | "done", at: number, repo: Repo): Delta[] {
     const throttleKey = `${s.key}|${kind}`;
     const last = lastNoticeAt.get(throttleKey);
     if (last !== undefined && at - last < CONFIG.noticeThrottleMs) return [];
     lastNoticeAt.set(throttleKey, at);
-    const c = s.characterId === null ? undefined : characters.get(s.characterId);
-    const name = c?.name ?? (s.tierKnown ? TEMP_NAME : ARRIVAL_NAME);
-    const text = kind === "needs_input" ? `${name} needs you in ${repo.name}` : `${name} finished a task in ${repo.name}`;
-    const n: Notice = { id: deps.newId(), at, kind, sessionKey: s.key, characterId: c?.id ?? null, characterName: name, repoName: repo.name, text };
-    return [{ type: "notice", notice: n }];
+    return [sessionNotice(s, kind, at, repo, name => kind === "needs_input" ? `${name} needs you in ${repo.name}` : `${name} finished a task in ${repo.name}`)];
+  }
+
+  /**
+   * Applies a context reading to a known session. The first reading only records the boundaries already in the tail;
+   * later ones apply each boundary newer than the last one seen, once. Never moves state, attention or lastEventAt.
+   */
+  function applyContext(s: Session, ev: AgentEvent): Delta[] {
+    const prev = s.context;
+    const boundaries = ev.boundaries ?? [];
+    const seen = prev?.seen ?? [];
+    const learned: Delta[] = [];
+    let compactions = prev?.compactions ?? 0, warned = prev?.warned ?? false, applied = 0;
+    // a boundary at or before the newest one already seen is old, even if it has dropped out of `seen`
+    let lastSeen = -1;
+    boundaries.forEach((b, i) => { if (seen.includes(b.uuid)) lastSeen = i; });
+    const fresh = prev === null ? [] : boundaries.slice(lastSeen + 1).filter(b => !seen.includes(b.uuid));
+    for (const b of fresh) {
+      compactions++; applied++; warned = false;
+      s.pendingStats.compactions++;
+      s.activity.push({ at: ev.at, kind: "context", text: `Compacted ${kTokens(b.preTokens)} → ${kTokens(b.postTokens)}, ${b.trigger}` });
+      if (b.trigger === "auto" && s.model !== null && b.preTokens > (learnedLimits.get(s.model) ?? 0)) {
+        learnedLimits.set(s.model, b.preTokens);
+        learned.push({ type: "learned_limit", model: s.model, limit: b.preTokens });
+      }
+    }
+    if (s.activity.length > CONFIG.activityMax) s.activity.splice(0, s.activity.length - CONFIG.activityMax);
+    const newSeen = [...seen, ...(prev === null ? boundaries : fresh).map(b => b.uuid).filter(u => !seen.includes(u))].slice(-CONFIG.context.seenMax);
+
+    const tokens = ev.contextTokens ?? fresh.at(-1)?.postTokens ?? prev?.tokens ?? 0;
+    const { limit, estimated } = contextLimit(tokens, settings.contextLimitOverride, s.model === null ? undefined : learnedLimits.get(s.model));
+    const pct = settings.contextWarnPct;
+    // whole-number comparisons: tokens / limit against pct / 100
+    if (warned && tokens * 100 < (pct - CONFIG.context.rearmPoints) * limit) warned = false;
+    const notices: Delta[] = [];
+    if (!warned && tokens * 100 >= pct * limit) {
+      warned = true;
+      if (settings.notifyContext) {
+        const repo = repos.get(s.repoId);
+        const share = Math.floor((tokens * 100) / limit);
+        notices.push(sessionNotice(s, "context_low", ev.at, repo, name => `${name} is running low on context (${share}%)${repo === undefined ? "" : ` in ${repo.name}`}`));
+      }
+    }
+
+    const next: ContextInfo = { tokens, limit, estimated, compactions, warned, seen: newSeen };
+    if (prev !== null && applied === 0 && notices.length === 0 && sameContext(prev, next)) return [];
+    s.context = next;
+    const out: Delta[] = [];
+    if (applied > 0) {
+      const c = s.characterId === null ? undefined : characters.get(s.characterId);
+      const credited = settle(s, ev.at, false);
+      out.push(...credited);
+      if (c !== undefined && credited.length > 0) out.push(characterDelta(c));
+    }
+    out.push(...learned, sessionDelta(s), ...notices);
+    return out;
   }
 
   function removeSession(key: string): Delta {
@@ -152,7 +230,6 @@ export function createWorld(init: WorldInit, deps: WorldDeps): World {
     lastNoticeAt.delete(`${key}|needs_input`);
     lastNoticeAt.delete(`${key}|done`);
     toolWindow.delete(key);
-    pendingFailures.delete(key);
     return { type: "session_removed", key };
   }
 
@@ -163,9 +240,8 @@ export function createWorld(init: WorldInit, deps: WorldDeps): World {
    */
   function award(session: Session, ev: AgentEvent): Delta[] {
     const temp = session.tierKnown && session.characterId === null;
-    if (ev.kind === "tool" && ev.failed === true) {
-      pendingFailures.set(session.key, (pendingFailures.get(session.key) ?? 0) + 1);
-    } else if (ev.kind === "tool") {
+    if (ev.kind === "tool" && ev.failed === true) session.pendingStats.failures++;
+    else if (ev.kind === "tool") {
       session.pendingStats.tools++;
       if (!temp) {
         let w = toolWindow.get(session.key);
@@ -189,17 +265,16 @@ export function createWorld(init: WorldInit, deps: WorldDeps): World {
    */
   function settle(session: Session, at: number, finishedTask: boolean): Delta[] {
     if (!session.tierKnown) return [];
-    const gain = session.pendingXp, stats = session.pendingStats, failures = pendingFailures.get(session.key) ?? 0;
+    const gain = session.pendingXp, stats = session.pendingStats;
     session.pendingXp = 0;
     session.pendingStats = emptyStats();
-    pendingFailures.delete(session.key);
     const c = session.characterId === null ? undefined : characters.get(session.characterId);
     const credit = {
       type: "credit" as const, at, characterId: c?.id ?? null, repoId: session.repoId,
-      tasks: stats.tasks, tools: stats.tools, failures, xp: c === undefined ? 0 : gain, levels: 0,
+      tasks: stats.tasks, tools: stats.tools, failures: stats.failures, xp: c === undefined ? 0 : gain, levels: 0,
       compactions: stats.compactions, sidekicks: stats.sidekicks,
     };
-    const counted = credit.xp > 0 || failures > 0 || Object.values(stats).some(n => n > 0);
+    const counted = credit.xp > 0 || Object.values(stats).some(n => n > 0);
     if (!counted) return [];
     if (c === undefined) return [credit];
     c.stats.tools += stats.tools;
@@ -241,7 +316,7 @@ export function createWorld(init: WorldInit, deps: WorldDeps): World {
     const agentId = ev.kind === "tool" && ev.detail?.agentId ? ev.detail.agentId : null;
     // these never create a session: for an unknown one they do nothing
     if (s === undefined && (ev.kind === "sub_start" || ev.kind === "sub_end" || ev.kind === "context" || agentId !== null)) return [];
-    if (ev.kind === "context") return [];
+    if (ev.kind === "context") return s === undefined ? [] : applyContext(s, ev);
 
     const out: Delta[] = [];
     const repo = repoFor(ev.repoPath, ev.at, out);
@@ -381,7 +456,19 @@ export function createWorld(init: WorldInit, deps: WorldDeps): World {
       if (typeof patch.theme !== "string" || patch.theme.length === 0) throw new Error("theme must be a non-empty string");
       next.theme = patch.theme;
     }
-    for (const k of ["notifyNeedsInput", "notifyDone", "sound"] as const) {
+    if (patch.contextWarnPct !== undefined) {
+      const { warnMin, warnMax } = CONFIG.context;
+      if (!Number.isInteger(patch.contextWarnPct) || patch.contextWarnPct < warnMin || patch.contextWarnPct > warnMax) {
+        throw new Error(`contextWarnPct must be an integer from ${warnMin} to ${warnMax}`);
+      }
+      next.contextWarnPct = patch.contextWarnPct;
+    }
+    if (patch.contextLimitOverride !== undefined) {
+      const o = patch.contextLimitOverride;
+      if (o !== null && (!Number.isInteger(o) || o < 1)) throw new Error("contextLimitOverride must be a positive integer or null");
+      next.contextLimitOverride = o;
+    }
+    for (const k of ["notifyNeedsInput", "notifyDone", "sound", "notifyContext"] as const) {
       if (patch[k] === undefined) continue;
       if (typeof patch[k] !== "boolean") throw new Error(`${k} must be a boolean`);
       next[k] = patch[k];

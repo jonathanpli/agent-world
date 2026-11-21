@@ -13,6 +13,13 @@ export const CONFIG = {
   sessionStaleMs: 43_200_000,
   sidekickStaleMs: 1_800_000,                     // a sidekick with no activity this long is dropped (a missed SubagentStop)
   noticeThrottleMs: 10_000,
+  context: {
+    defaultLimit: 200_000,
+    steps: [200_000, 500_000, 1_000_000],         // a reading above the estimated limit moves it to the first step above
+    warnMin: 50, warnMax: 95,                     // contextWarnPct range (whole percent)
+    rearmPoints: 10,                              // the low notice re-arms once the reading falls this many points below
+    seenMax: 20,                                  // boundary uuids remembered per session
+  },
   rosterCapDefault: 12,
   rosterCapMax: 50,
   activityMax: 20,
@@ -74,5 +81,8 @@ export const CONFIG = {
     previewScale: 4,                              // inspector Look preview: device px per sprite px
     clockMs: 1_000,                               // inspector durations refresh
   },
-  defaultSettings: { theme: "office", notifyNeedsInput: true, notifyDone: true, sound: false, rosterCap: 12 },
+  defaultSettings: {
+    theme: "office", notifyNeedsInput: true, notifyDone: true, sound: false, rosterCap: 12,
+    notifyContext: true, contextWarnPct: 80, contextLimitOverride: null as number | null,
+  },
 } as const;

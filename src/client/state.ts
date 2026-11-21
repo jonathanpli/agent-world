@@ -36,6 +36,7 @@ export function applyDeltas(s: ClientState, deltas: Delta[]): Notice[] {
       case "settings": s.settings = d.settings; break;
       case "notice": notices.push(d.notice); s.notices.push(d.notice); break;
       case "credit": break;
+      case "learned_limit": break;
     }
   }
   const excess = s.notices.length - CONFIG.client.noticeMax;

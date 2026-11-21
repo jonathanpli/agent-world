@@ -39,6 +39,14 @@ test("credit deltas change nothing on the client", () => {
   expect(s).toEqual(before);
 });
 
+test("learned_limit deltas change nothing on the client", () => {
+  const s = emptyState();
+  applySnapshot(s, snap({ characters: [char("a")], repos: [repo("r1")], sessions: [session("k1", "a", "r1")] }));
+  const before = structuredClone(s);
+  expect(applyDeltas(s, [{ type: "learned_limit", model: "m", limit: 180_000 }])).toEqual([]);
+  expect(s).toEqual(before);
+});
+
 test("session_removed and notices", () => {
   const s = emptyState();
   applySnapshot(s, snap({ characters: [char("a")], repos: [repo("r1")], sessions: [session("k1", "a", "r1")] }));

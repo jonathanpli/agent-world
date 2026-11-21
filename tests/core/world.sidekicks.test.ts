@@ -154,7 +154,7 @@ test("an arriving session holds sidekick counts and credits them on binding", ()
   const held = w.apply(bare("sub_end", { at: 3000, detail: { agentId: "a1", agentType: "Explore" } }));
   expect(credits(held)).toEqual([]);
   expect(chars(w)).toEqual([]);
-  expect(sess(w)[0]!.pendingStats).toEqual({ tasks: 0, tools: 0, compactions: 0, sidekicks: 1 });
+  expect(sess(w)[0]!.pendingStats).toEqual({ tasks: 0, tools: 0, compactions: 0, sidekicks: 1, failures: 0 });
   const ds = w.apply(bare("tool", { at: 4000, tier: 3 }));
   expect(chars(w)[0]!.stats.sidekicks).toBe(1);
   expect(credits(ds)).toEqual([{
@@ -170,6 +170,17 @@ test("an arriving session holds failures and credits them on binding", () => {
   const ds = w.apply(bare("prompt", { at: 3000, tier: 2 }));
   expect(credits(ds)).toHaveLength(1);
   expect(credits(ds)[0]).toMatchObject({ failures: 1, tools: 0, xp: CONFIG.xp.prompt });
+});
+
+test("an arriving session whose only held activity is failures is credited when it ends", () => {
+  const w = newWorld();
+  w.apply(bare("session_start", { at: 1000 }));
+  w.apply(bare("tool", { at: 2000, failed: true }));
+  expect(sess(w)[0]!.pendingStats).toEqual({ tasks: 0, tools: 0, compactions: 0, sidekicks: 0, failures: 1 });
+  const ds = w.apply(bare("session_end", { at: 3000 }));
+  expect(credits(ds)).toHaveLength(1);
+  expect(credits(ds)[0]).toMatchObject({ failures: 1, tools: 0, xp: 0, characterId: chars(w)[0]!.id });
+  expect(ds.at(-1)).toEqual({ type: "session_removed", key: "t:s1" });
 });
 
 test("credits sum to the character's XP and stats", () => {

@@ -22,6 +22,14 @@ export type Character = {
 export type Repo = { id: string; path: string; name: string; createdAt: number };
 export type Sidekick = { id: string; type: string; since: number; lastAt: number };
 export type LastTool = { kind: ToolKind; at: number; failed: boolean; agentId: string | null };
+/** The session's context window: the latest reading, the limit it is measured against, and compactions seen. */
+export type ContextInfo = {
+  tokens: number; limit: number;
+  estimated: boolean;                // false only when the limit is the owner's override
+  compactions: number;               // compaction boundaries applied this session
+  warned: boolean;                   // the running-low notice fired for this fill
+  seen: string[];                    // the newest boundary uuids already applied (or recorded), at most CONFIG.context.seenMax
+};
 export type ActivityLine = { at: number; kind: EventKind; text: string };
 export type Session = {
   key: string;                       // `${source}:${sessionId}`
@@ -33,14 +41,19 @@ export type Session = {
   tierKnown: boolean;                // false until an event carries a tier or the grace period ends; unbound until then
   graceSince: number | null;         // when the grace clock started: the first prompt (or first event if seen mid-session)
   pendingXp: number;                 // earned while the tier is unknown, credited on binding
-  pendingStats: { tasks: number; tools: number; compactions: number; sidekicks: number };
+  pendingStats: { tasks: number; tools: number; compactions: number; sidekicks: number; failures: number };
   startedAt: number; lastEventAt: number; task: string | null; lastSummary: string | null;
   attention: boolean; activity: ActivityLine[];
   sidekicks: Sidekick[];             // running subagents, oldest first
   lastTool: LastTool | null;         // the most recent tool event, successful or failed
+  context: ContextInfo | null;       // null until the first reading
 };
-export type Settings = { theme: string; notifyNeedsInput: boolean; notifyDone: boolean; sound: boolean; rosterCap: number };
-export type NoticeKind = "needs_input" | "done" | "level_up" | "achievement";
+export type Settings = {
+  theme: string; notifyNeedsInput: boolean; notifyDone: boolean; sound: boolean; rosterCap: number;
+  notifyContext: boolean; contextWarnPct: number;
+  contextLimitOverride: number | null;   // tokens; null = estimate the limit
+};
+export type NoticeKind = "needs_input" | "done" | "level_up" | "achievement" | "context_low";
 export type Notice = { id: string; at: number; kind: NoticeKind; sessionKey: string | null; characterId: string | null; characterName: string; repoName: string | null; text: string };
 export type Delta =
   | { type: "character"; character: Character }
@@ -51,5 +64,7 @@ export type Delta =
   | { type: "notice"; notice: Notice }
   /** What one call credited, at the moment it was credited (held "Arriving" XP lands in the binding call). */
   | { type: "credit"; at: number; characterId: string | null; repoId: string;      // null = temp
-      tasks: number; tools: number; failures: number; xp: number; levels: number; compactions: number; sidekicks: number };
+      tasks: number; tools: number; failures: number; xp: number; levels: number; compactions: number; sidekicks: number }
+  /** An automatic compaction raised the learned context limit of `model` (tokens). */
+  | { type: "learned_limit"; model: string; limit: number };
 export type Snapshot = { serverTime: number; demo: boolean; characters: Character[]; repos: Repo[]; sessions: Session[]; settings: Settings };
