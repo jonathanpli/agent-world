@@ -139,3 +139,50 @@ test("updateSettings validates", () => {
   expect(d).toEqual([{ type: "settings", settings: { ...CONFIG.defaultSettings, rosterCap: 50, theme: "space", sound: true } }]);
   expect(w.snapshot(0, false).settings).toEqual(d[0].type === "settings" ? d[0].settings : null);
 });
+
+test("retiring a character with a live session hands the session to a free tier-matched character", () => {
+  const w = newWorld();
+  w.apply(ev("session_start", { tier: 3 }));
+  w.apply(ev("session_start", { sessionId: "s2", tier: 3 }));
+  w.apply(ev("session_end", { sessionId: "s2" }));          // the second character is now free
+  const [a, b] = chars(w);
+  const bound = sess(w)[0]!.characterId;
+  const free = bound === a.id ? b : a;
+  const xpBefore = chars(w).map(c => [c.id, c.xp]);
+  const d = w.updateCharacter(bound!, { retired: true });
+  const s = sess(w)[0]!;
+  expect(s.characterId).toBe(free.id);
+  expect(sess(w).some(x => x.characterId === bound)).toBe(false);
+  expect(d).toContainEqual({ type: "character", character: expect.objectContaining({ id: bound, retired: true }) });
+  expect(d).toContainEqual({ type: "session", session: s });
+  expect(chars(w).map(c => [c.id, c.xp])).toEqual(xpBefore);   // no XP moves
+});
+
+test("retiring with a live session and no free character creates a new one under the cap", () => {
+  const w = newWorld();
+  w.apply(ev("session_start", { tier: 2 }));
+  const first = chars(w)[0].id;
+  const d = w.updateCharacter(first, { retired: true });
+  const s = sess(w)[0]!;
+  expect(s.characterId).not.toBeNull();
+  expect(s.characterId).not.toBe(first);
+  const made = chars(w).find(c => c.id === s.characterId)!;
+  expect(made).toMatchObject({ tier: 2, retired: false, xp: 0 });
+  expect(d).toContainEqual({ type: "character", character: made });
+  expect(d).toContainEqual({ type: "session", session: s });
+
+});
+
+test("retiring when the cap is full makes the session a temp", () => {
+  const w = newWorld({ settings: { ...CONFIG.defaultSettings, rosterCap: 2 } });
+  w.apply(ev("session_start", { tier: 1 }));
+  w.apply(ev("session_start", { sessionId: "s2", tier: 2 }));    // two active characters fill the cap
+  const target = sess(w).find(x => x.sessionId === "s1")!.characterId!;
+  w.updateSettings({ rosterCap: 1 });
+  const d = w.updateCharacter(target, { retired: true });
+  const s = sess(w).find(x => x.sessionId === "s1")!;
+  expect(s.characterId).toBeNull();
+  expect(s.tempLook).not.toBeNull();
+  expect(d).toContainEqual({ type: "session", session: s });
+  expect(chars(w).filter(c => !c.retired)).toHaveLength(1);
+});

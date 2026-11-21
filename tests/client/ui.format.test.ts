@@ -1,6 +1,6 @@
 import { expect, test } from "vitest";
-import { formatDuration, lockLevel, xpProgress } from "../../src/client/ui/inspector";
-import { rosterRows } from "../../src/client/ui/roster";
+import { ackEpisode, formatDuration, lockLevel, renameTo, shouldAck, xpProgress } from "../../src/client/ui/inspector";
+import { rosterKey, rosterRows } from "../../src/client/ui/roster";
 import { tickerItems } from "../../src/client/ui/ticker";
 import { applySnapshot, emptyState } from "../../src/client/state";
 import { HATS, unlocked } from "../../src/shared/cosmetics";
@@ -55,4 +55,37 @@ test("ticker: the last N notice texts, newest first", () => {
   expect(items[0]).toBe("notice 11");
   expect(items.at(-1)).toBe(`notice ${12 - CONFIG.client.tickerMax}`);
   expect(tickerItems([])).toEqual([]);
+});
+
+test("shouldAck: an explicit selection acks a session with attention, once per attention episode", () => {
+  const s = session("k", "c", "r", { attention: true, state: "done", stateSince: 5, lastEventAt: 5 });
+  expect(shouldAck(s, true, null)).toBe(true);                      // selected, never acked
+  expect(shouldAck(s, false, null)).toBe(false);                    // a delta arriving while open is not a selection
+  expect(shouldAck(s, true, ackEpisode(s))).toBe(false);            // already acked this episode
+  expect(shouldAck({ ...s, attention: false }, true, null)).toBe(false);
+  expect(shouldAck(undefined, true, null)).toBe(false);             // off duty: nothing to ack
+  const again = { ...s, state: "needs_input" as const, stateSince: 9, lastEventAt: 9 };
+  expect(shouldAck(again, true, ackEpisode(s))).toBe(true);         // a new episode on the same session
+  const doneAgain = { ...s, lastEventAt: 12 };                      // a second task_done keeps state and stateSince
+  expect(shouldAck(doneAgain, true, ackEpisode(s))).toBe(true);
+});
+
+test("rosterKey changes only when what the rows show changes", () => {
+  const s = emptyState();
+  applySnapshot(s, snap({ characters: [char("a"), char("b")], repos: [repo("r")], sessions: [session("1", "a", "r")] }));
+  const title = (t: number): string => `T${t}`;
+  const k = rosterKey(rosterRows(s), null, title);
+  s.sessions.set("1", { ...s.sessions.get("1")!, lastEventAt: 99, activity: [{ at: 99, kind: "tool", text: "x" }] });
+  expect(rosterKey(rosterRows(s), null, title)).toBe(k);           // an activity-only delta: same rows
+  expect(rosterKey(rosterRows(s), "a", title)).not.toBe(k);        // selection
+  expect(rosterKey(rosterRows(s), null, t => `U${t}`)).not.toBe(k); // theme titles
+  s.sessions.set("1", { ...s.sessions.get("1")!, attention: true, state: "needs_input" });
+  expect(rosterKey(rosterRows(s), null, title)).not.toBe(k);
+});
+
+test("renameTo: the trimmed name to send, or null to cancel (empty or unchanged)", () => {
+  expect(renameTo("  Ada  ", "Bo")).toBe("Ada");
+  expect(renameTo("   ", "Bo")).toBeNull();
+  expect(renameTo("", "Bo")).toBeNull();
+  expect(renameTo(" Bo ", "Bo")).toBeNull();
 });

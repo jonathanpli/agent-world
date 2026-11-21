@@ -38,13 +38,13 @@ test("attentionCount counts sessions with attention", () => {
   expect(attentionCount(emptyState())).toBe(0);
 });
 
-test("attentionCount leaves out sessions of retired characters, which nothing on screen can clear", () => {
+test("attentionCount counts every session with attention, whoever it is bound to", () => {
   const s = emptyState();
   applySnapshot(s, snap({
     characters: [char("a"), char("gone", { retired: true })], repos: [repo("r")],
-    sessions: [session("1", "a", "r", { attention: true }), session("2", "gone", "r", { attention: true })],
+    sessions: [session("1", "a", "r", { attention: true }), session("2", "gone", "r", { attention: true }), session("3", "a", "r")],
   }));
-  expect(attentionCount(s)).toBe(1);
+  expect(attentionCount(s)).toBe(2);
 });
 
 class FakeNotification {

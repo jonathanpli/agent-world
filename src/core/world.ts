@@ -225,7 +225,17 @@ export function createWorld(init: WorldInit, deps: WorldDeps): World {
     if (name !== undefined) c.name = name;
     if (patch.look !== undefined) c.look = clone(patch.look);
     if (patch.retired !== undefined) c.retired = patch.retired;
-    return [characterDelta(c)];
+    const out: Delta[] = [characterDelta(c)];
+    if (c.retired) {
+      // hand each live session over as a model change would: release, then the normal assignment (no XP moves)
+      for (const s of sessions.values()) {
+        if (s.characterId !== c.id) continue;
+        s.characterId = null;
+        assign(s, s.lastEventAt, out);
+        out.push(sessionDelta(s));
+      }
+    }
+    return out;
   }
 
   function updateSettings(patch: Partial<Settings>): Delta[] {

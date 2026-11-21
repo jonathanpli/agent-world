@@ -27,6 +27,11 @@ export function rosterRows(s: ClientState): RosterRow[] {
     rank(a) - rank(b) || Number(a.temp) - Number(b.temp) || a.name.localeCompare(b.name) || (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
 }
 
+/** What the rendered rows show; the list is rebuilt only when this changes, so a click is not lost to a rebuild. */
+export function rosterKey(rows: RosterRow[], selected: string | null, tierTitle: (t: Tier) => string): string {
+  return JSON.stringify([selected, rows.map(r => [r.id, r.name, tierTitle(r.tier), r.level, r.state, r.attention])]);
+}
+
 export type RosterDeps = { state: ClientState; selected(): string | null; select(id: string): void; tierTitle(t: Tier): string };
 
 export function mount(root: HTMLElement, deps: RosterDeps): { render(): void } {
@@ -37,10 +42,15 @@ export function mount(root: HTMLElement, deps: RosterDeps): { render(): void } {
     if (row !== null) deps.select(row.dataset.id!);
   });
 
+  let shown = "";
   return {
     render() {
       const sel = deps.selected();
-      list.replaceChildren(...rosterRows(deps.state).map(r => {
+      const rows = rosterRows(deps.state);
+      const key = rosterKey(rows, sel, deps.tierTitle);
+      if (key === shown) return;
+      shown = key;
+      list.replaceChildren(...rows.map(r => {
         const button = el("button", { type: "button", class: `row state-${r.state}${r.attention ? " attention" : ""}`, "data-id": r.id },
           el("span", { class: "icon", title: STATE_TEXT[r.state] }, r.attention ? (r.state === "done" ? "✓" : "!") : STATE_ICON[r.state]),
           el("span", { class: "who" },

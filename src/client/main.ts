@@ -76,7 +76,7 @@ function sync(): void {
 engine.onSelect(id => {
   selected = id;
   roster.render();
-  inspector.render();
+  inspector.render(true);              // an explicit selection: acknowledges the shown session if it has attention
   dockInspector();
 });
 

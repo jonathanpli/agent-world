@@ -84,3 +84,17 @@ test("migrations are forward-only and idempotent", () => {
   db.close();
   expect(row.user_version).toBe(MIGRATIONS.length);
 });
+
+test("retiring a character with a live session persists the handover", () => {
+  const store = openStore(":memory:");
+  const w = newWorld();
+  store.persist(w.apply(ev("session_start")));
+  const id = w.snapshot(0, false).characters[0]!.id;
+  store.persist(w.updateCharacter(id, { retired: true }));
+  const after = createWorld(store.load(), deps()).snapshot(0, false);
+  expect(after.sessions).toEqual(w.snapshot(0, false).sessions);
+  expect(after.characters).toEqual(w.snapshot(0, false).characters);
+  expect(after.sessions[0]!.characterId).not.toBe(id);
+  expect(after.sessions[0]!.characterId).not.toBeNull();
+  store.close();
+});

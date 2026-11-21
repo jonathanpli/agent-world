@@ -14,12 +14,10 @@ export function notificationFor(n: Notice, settings: Settings): { title: string;
   return { title: `${n.characterName} ${verb}${where}`, body: n.text };
 }
 
-/** Sessions whose attention marker is showing. A retired character's session is not drawn, so it does not count. */
+/** Sessions with attention. */
 export function attentionCount(s: ClientState): number {
   let k = 0;
-  for (const x of s.sessions.values()) {
-    if (x.attention && (x.characterId === null || s.characters.get(x.characterId)?.retired !== true)) k++;
-  }
+  for (const x of s.sessions.values()) if (x.attention) k++;
   return k;
 }
 

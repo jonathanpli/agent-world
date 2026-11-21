@@ -29,6 +29,26 @@ export function lockLevel(index: number): number {
   return (index + 1) * CONFIG.cosmeticEveryLevels;
 }
 
+/** Identifies one attention episode of a session: a new needs_input or task_done starts another. */
+export function ackEpisode(s: Session): string {
+  return `${s.key}@${s.stateSince}@${s.lastEventAt}`;
+}
+
+/**
+ * Whether to acknowledge `s`: only on an explicit selection (canvas, roster or notification click) of its actor, while it
+ * has attention, and once per attention episode (`lastAcked` is the episode last acked). A delta arriving while the
+ * inspector is open never acks.
+ */
+export function shouldAck(s: Session | undefined, explicit: boolean, lastAcked: string | null): boolean {
+  return explicit && s !== undefined && s.attention && ackEpisode(s) !== lastAcked;
+}
+
+/** The name a rename should send, or null to cancel: an empty or unchanged name cancels. */
+export function renameTo(input: string, current: string): string | null {
+  const name = input.trim();
+  return name.length === 0 || name === current ? null : name;
+}
+
 type Tab = "now" | "look" | "history" | "achievements";
 const TABS: { id: Tab; label: string }[] = [
   { id: "now", label: "Now" }, { id: "look", label: "Look" }, { id: "history", label: "History" }, { id: "achievements", label: "Achievements" },
@@ -45,7 +65,8 @@ export type InspectorDeps = {
 const clock = (at: number): string => new Date(at).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", hourCycle: "h23" });
 const sameLook = (a: Look, b: Look): boolean => JSON.stringify(a) === JSON.stringify(b);
 
-export function mount(root: HTMLElement, deps: InspectorDeps): { render(): void } {
+/** `render(true)` is for an explicit selection, which may acknowledge the shown session; plain `render()` never does. */
+export function mount(root: HTMLElement, deps: InspectorDeps): { render(explicit?: boolean): void } {
   const { state } = deps;
   let current: string | null = null;
   let tab: Tab = "now";
@@ -53,6 +74,7 @@ export function mount(root: HTMLElement, deps: InspectorDeps): { render(): void 
   let confirmRetire = false;
   let renaming = false;
   let bodyKey = "";                            // what the body was last built from; rebuilt only when it changes
+  let lastAcked: string | null = null;         // the attention episode last acknowledged
 
   const close = el("button", { type: "button", class: "close", title: "Close" }, "×");
   close.setAttribute("aria-label", "Close inspector");
@@ -97,8 +119,8 @@ export function mount(root: HTMLElement, deps: InspectorDeps): { render(): void 
       if (done) return;
       done = true;
       renaming = false;
-      const name = input.value.trim();
-      if (save && name !== c.name) void call(api.patchCharacter(c.id, { name }));
+      const name = renameTo(input.value, c.name);
+      if (save && name !== null) void call(api.patchCharacter(c.id, { name }));
       render();
     };
     input.addEventListener("keydown", e => {
@@ -284,16 +306,18 @@ export function mount(root: HTMLElement, deps: InspectorDeps): { render(): void 
     renaming = false;
     bodyKey = "";
     showError("");
-    const s = resolve()?.s;
-    if (s?.attention) void call(api.ack(s.key));
   }
 
-  function render(): void {
+  function render(explicit = false): void {
     const id = deps.selected();
     if (id !== current && id !== null) open(id);
     current = id;
     const found = resolve();
     if (found === null) { root.hidden = true; return; }
+    if (shouldAck(found.s, explicit, lastAcked)) {
+      lastAcked = ackEpisode(found.s!);
+      void call(api.ack(found.s!.key));
+    }
     root.hidden = false;
     const { c, s } = found;
     if (c === undefined) tab = "now";
