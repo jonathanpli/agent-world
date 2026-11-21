@@ -23,11 +23,20 @@ export function mount(root: HTMLDialogElement, deps: { state: ClientState }): { 
   const theme = el("select", {});
   for (const t of THEMES) theme.add(new Option(t.name, t.id));
   const check = (): HTMLInputElement => el("input", { type: "checkbox" });
-  const needsInput = check(), done = check(), sound = check();
+  const needsInput = check(), done = check(), sound = check(), ctxNotify = check();
   const cap = el("input", { type: "number" });
   cap.min = "1";
   cap.max = String(CONFIG.rosterCapMax);
   cap.step = "1";
+  const warn = el("input", { type: "number" });
+  warn.min = String(CONFIG.context.warnMin);
+  warn.max = String(CONFIG.context.warnMax);
+  warn.step = "1";
+  const limit = el("input", { type: "number" });
+  limit.min = "1";
+  limit.step = "1";
+  limit.placeholder = "estimate";
+  const useEstimate = el("button", { type: "button" }, "Use estimate");
   const enable = el("button", { type: "button" }, "Enable notifications");
   const permText = el("span", { class: "perm" });
   const error = el("p", { class: "error" });
@@ -42,6 +51,9 @@ export function mount(root: HTMLDialogElement, deps: { state: ClientState }): { 
     field("Notify when an agent needs you", needsInput),
     field("Notify when an agent finishes", done),
     field("Chime", sound),
+    field("Context running low", ctxNotify),
+    field("Warn at context %", warn, `${CONFIG.context.warnMin} to ${CONFIG.context.warnMax}.`),
+    field("Context limit override", el("span", { class: "inline" }, limit, useEstimate), "Tokens. Leave empty to estimate it from each model."),
     field("Roster cap", cap, `Named characters, 1 to ${CONFIG.rosterCapMax}. Past it, sessions show as temps.`),
     el("div", { class: "notify-row" }, enable, permText),
     error,
@@ -55,6 +67,10 @@ export function mount(root: HTMLDialogElement, deps: { state: ClientState }): { 
   needsInput.addEventListener("change", () => put({ notifyNeedsInput: needsInput.checked }));
   done.addEventListener("change", () => put({ notifyDone: done.checked }));
   sound.addEventListener("change", () => put({ sound: sound.checked }));
+  ctxNotify.addEventListener("change", () => put({ notifyContext: ctxNotify.checked }));
+  warn.addEventListener("change", () => put({ contextWarnPct: Number(warn.value) }));
+  limit.addEventListener("change", () => put({ contextLimitOverride: limit.value.trim() === "" ? null : Number(limit.value) }));
+  useEstimate.addEventListener("click", () => { limit.value = ""; put({ contextLimitOverride: null }); });
   cap.addEventListener("change", () => put({ rosterCap: Number(cap.value) }));
   closeBtn.addEventListener("click", () => root.close());
   enable.addEventListener("click", () => {
@@ -69,6 +85,10 @@ export function mount(root: HTMLDialogElement, deps: { state: ClientState }): { 
     needsInput.checked = s.notifyNeedsInput;
     done.checked = s.notifyDone;
     sound.checked = s.sound;
+    ctxNotify.checked = s.notifyContext;
+    if (document.activeElement !== warn) warn.value = String(s.contextWarnPct);
+    if (document.activeElement !== limit) limit.value = s.contextLimitOverride === null ? "" : String(s.contextLimitOverride);
+    useEstimate.disabled = s.contextLimitOverride === null;
     if (document.activeElement !== cap) cap.value = String(s.rosterCap);
     const p = permission();
     permText.textContent = PERMISSION_TEXT[p];

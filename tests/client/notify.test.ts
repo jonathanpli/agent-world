@@ -148,3 +148,18 @@ test("visibleToasts keeps the newest CONFIG.client.toastMax", () => {
   expect(visibleToasts([1, 2, 3, 4, 5])).toEqual([3, 4, 5]);
   expect(visibleToasts([1])).toEqual([1]);
 });
+
+test("context_low toasts and notifies only while notifyContext is on", () => {
+  const low = { ...n("context_low"), text: "Bo's context is 82% full" };
+  expect(toastFor(low, { ...on, notifyContext: true })).toBe("Bo's context is 82% full");
+  expect(toastFor(low, { ...on, notifyContext: false })).toBeNull();
+  expect(notificationFor(low, { ...on, notifyContext: true })).toEqual({ title: "Bo — context running low", body: "Bo's context is 82% full" });
+  expect(notificationFor(low, { ...on, notifyContext: false })).toBeNull();
+});
+
+test("attentionCount ignores sessions that are only warned", () => {
+  const s = emptyState();
+  applySnapshot(s, snap({ characters: [char("a")], repos: [repo("r")], sessions: [
+    session("k", "a", "r", { attention: false, context: { tokens: 190_000, peak: 190_000, limit: 200_000, estimated: true, compactions: 0, warned: true, seen: [] } })] }));
+  expect(attentionCount(s)).toBe(0);
+});

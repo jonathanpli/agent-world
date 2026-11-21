@@ -2,11 +2,46 @@ import { ACHIEVEMENTS } from "../../core/achievements";
 import { levelForXp, repoRank, xpForLevel } from "../../core/levels";
 import { CONFIG } from "../../shared/config";
 import { ACCESSORIES, BODY_COLORS, HAIR_COLORS, HAIR_STYLES, HATS, SKIN_TONES, unlocked } from "../../shared/cosmetics";
-import type { Character, Look, Session, Tier } from "../../shared/types";
+import type { Character, ContextInfo, Look, Session, Sidekick, Tier } from "../../shared/types";
 import { safeDraw, THEMES, type Theme } from "../engine/theme";
 import { api } from "../net";
 import { sessionOf, tierTitleOf, unboundLabel, type ClientState } from "../state";
 import { attempt, el, STATE_TEXT } from "./dom";
+
+/** 950 -> "950", 143_200 -> "143k", 1_200_000 -> "1.2M". */
+export function formatTokens(n: number): string {
+  if (n < 1_000) return String(Math.round(n));
+  if (n < 999_500) return `${Math.round(n / 1_000)}k`;
+  return `${(Math.round(n / 100_000) / 10).toString()}M`;
+}
+
+/** The fill as a whole percent, rounded down and capped at 100 for display. */
+export function contextPct(c: ContextInfo): number {
+  return c.limit > 0 ? Math.min(100, Math.floor((c.tokens / c.limit) * 100)) : 0;
+}
+
+/** calm below 60%, warm from 60%, hot from the owner's warn threshold. */
+export function contextLevel(c: ContextInfo, warnPct: number): "calm" | "warm" | "hot" {
+  const pct = (c.tokens / c.limit) * 100;
+  return pct >= warnPct ? "hot" : pct >= 60 ? "warm" : "calm";
+}
+
+/** "Context 143k of 200k (72%, estimated) · 2 compactions this session"; the suffix is left off at zero compactions. */
+export function contextLine(c: ContextInfo): string {
+  const detail = c.estimated ? `${contextPct(c)}%, estimated` : `${contextPct(c)}%`;
+  const base = `Context ${formatTokens(c.tokens)} of ${formatTokens(c.limit)} (${detail})`;
+  return c.compactions === 0 ? base : `${base} · ${c.compactions} ${c.compactions === 1 ? "compaction" : "compactions"} this session`;
+}
+
+/** "Sidekicks: Explore (2 min), general-purpose (40 s)"; null when none run. */
+export function sidekickLine(ks: Sidekick[], now: number): string | null {
+  if (ks.length === 0) return null;
+  const age = (since: number): string => {
+    const sec = Math.max(0, Math.floor((now - since) / 1000));
+    return sec < 60 ? `${sec} s` : `${Math.floor(sec / 60)} min`;
+  };
+  return `Sidekicks: ${ks.map(k => `${k.type.slice(0, 24)} (${age(k.since)})`).join(", ")}`;
+}
 
 /** "45s", "12m", "3h 05m". Negative spans count as zero. */
 export function formatDuration(ms: number): string {
@@ -170,6 +205,7 @@ export function mount(root: HTMLElement, deps: InspectorDeps): { render(explicit
     const where: (Node | string)[] = [repo?.name ?? "unknown repo"];
     if (c !== undefined) where.push(el("span", { class: "dim" }, ` · ${repoRank(c.repoXp[s.repoId] ?? 0)}`));
     const activity = [...s.activity].reverse();
+    const kids = sidekickLine(s.sidekicks, Date.now());
     const dismiss = confirmDismiss
       ? el("div", { class: "confirm" }, "Dismiss this session? Use it when its terminal is gone; it ends as if the session had closed.",
         el("button", { type: "button", class: "danger", "data-action": "dismiss-yes" }, "Dismiss"),
@@ -183,6 +219,8 @@ export function mount(root: HTMLElement, deps: InspectorDeps): { render(explicit
         ...row("Task", s.task ?? "none yet"),
         ...row("Last", s.lastSummary ?? "nothing yet"),
         ...row("Session", since(s.startedAt))),
+      ...(s.context === null ? [] : [el("p", { class: "dim context-line" }, contextLine(s.context))]),
+      ...(kids === null ? [] : [el("p", { class: "dim sidekick-line" }, kids)]),
       el("h3", {}, "Activity"),
       activity.length === 0
         ? el("p", { class: "dim" }, "No activity yet.")

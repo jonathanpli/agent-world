@@ -9,12 +9,13 @@ export function notificationFor(n: Notice, settings: Settings): { title: string;
   let verb: string;
   if (n.kind === "needs_input" && settings.notifyNeedsInput) verb = "needs you";
   else if (n.kind === "done" && settings.notifyDone) verb = "finished";
+  else if (n.kind === "context_low" && settings.notifyContext) return { title: `${n.characterName} — context running low`, body: n.text };
   else return null;
   const where = n.repoName === null ? "" : ` — ${n.repoName}`;
   return { title: `${n.characterName} ${verb}${where}`, body: n.text };
 }
 
-/** The in-game toast text for a notice: needs_input and done under the same toggles as `notificationFor`, level_up always, else null. */
+/** The in-game toast text for a notice: needs_input, done and context_low under the same toggles as `notificationFor`, level_up always, else null. */
 export function toastFor(n: Notice, settings: Settings): string | null {
   if (n.kind === "level_up") return n.text;
   return notificationFor(n, settings) === null ? null : n.text;

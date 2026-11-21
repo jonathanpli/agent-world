@@ -1,11 +1,13 @@
 import { expect, test } from "vitest";
-import { ackEpisode, formatDuration, lockLevel, renameTo, shouldAck, xpProgress } from "../../src/client/ui/inspector";
+import { ackEpisode, contextLevel, contextLine, formatTokens, sidekickLine, formatDuration, lockLevel, renameTo, shouldAck, xpProgress } from "../../src/client/ui/inspector";
 import { rosterKey, rosterRows, rosterSub } from "../../src/client/ui/roster";
 import { tickerItems } from "../../src/client/ui/ticker";
 import { applySnapshot, emptyState, tierTitleOf, unboundLabel } from "../../src/client/state";
 import { plateText } from "../../src/client/engine/overlay";
 import { HATS, unlocked } from "../../src/shared/cosmetics";
 import { CONFIG } from "../../src/shared/config";
+import type { ContextInfo } from "../../src/shared/types";
+import { applyDeltas } from "../../src/client/state";
 import { char, notice, repo, session, snap } from "../helpers/clientFixtures";
 
 test("formatDuration", () => {
@@ -120,4 +122,71 @@ test("an arrival has no tier title: plate, roster sub-line and inspector title l
   expect(rosterSub(a, title)).toBe("working");
   expect(rosterSub(t, title)).toBe("T3 · working");
   expect(rosterKey(rows, null, title)).not.toContain("T2");
+});
+
+const ctx = (over: Partial<ContextInfo> = {}): ContextInfo =>
+  ({ tokens: 143_000, peak: 143_000, limit: 200_000, estimated: true, compactions: 0, warned: false, seen: [], ...over });
+
+test("formatTokens", () => {
+  expect(formatTokens(950)).toBe("950");
+  expect(formatTokens(143_200)).toBe("143k");
+  expect(formatTokens(1_200_000)).toBe("1.2M");
+  expect(formatTokens(200_000)).toBe("200k");
+  expect(formatTokens(1_000_000)).toBe("1M");
+});
+
+test("contextLevel is calm under 60%, warm from 60%, hot from the warn threshold", () => {
+  expect(contextLevel(ctx({ tokens: 119_999 }), 80)).toBe("calm");
+  expect(contextLevel(ctx({ tokens: 120_000 }), 80)).toBe("warm");
+  expect(contextLevel(ctx({ tokens: 160_000 }), 80)).toBe("hot");
+  expect(contextLevel(ctx({ tokens: 130_000 }), 65)).toBe("hot");
+});
+
+test("contextLine rounds down, caps at 100, pluralises and drops 'estimated' with an override", () => {
+  expect(contextLine(ctx({ compactions: 2 }))).toBe("Context 143k of 200k (71%, estimated) · 2 compactions this session");
+  expect(contextLine(ctx({ tokens: 144_000, compactions: 1 }))).toBe("Context 144k of 200k (72%, estimated) · 1 compaction this session");
+  expect(contextLine(ctx({ estimated: false }))).toBe("Context 143k of 200k (71%)");
+  expect(contextLine(ctx({ tokens: 250_000 }))).toContain("(100%, estimated)");
+});
+
+test("sidekickLine lists types with ages, cuts types to 24 characters, and is null with none", () => {
+  const now = 1_000_000;
+  expect(sidekickLine([], now)).toBeNull();
+  expect(sidekickLine([
+    { id: "a", type: "Explore", since: now - 130_000, lastAt: now },
+    { id: "b", type: "general-purpose", since: now - 40_000, lastAt: now },
+  ], now)).toBe("Sidekicks: Explore (2 min), general-purpose (40 s)");
+  expect(sidekickLine([{ id: "a", type: "x".repeat(40), since: now, lastAt: now }], now)).toBe(`Sidekicks: ${"x".repeat(24)} (0 s)`);
+});
+
+test("rosterRows carries context and a hot gauge does not change the order", () => {
+  const s = emptyState();
+  applySnapshot(s, snap({
+    characters: [char("a"), char("b")], repos: [repo("r")],
+    sessions: [session("ka", "a", "r", { context: ctx({ tokens: 190_000 }) }), session("kb", "b", "r")],
+  }));
+  const rows = rosterRows(s);
+  expect(rows.map(r => r.id)).toEqual(["a", "b"]);
+  expect(rows[0]!.context).toEqual({ pct: 95, level: "hot" });
+  expect(rows[1]!.context).toBeNull();
+  const before = rosterKey(rows, null, () => "T");
+  s.sessions.get("ka")!.context = ctx({ tokens: 100_000 });
+  expect(rosterKey(rosterRows(s), null, () => "T")).not.toBe(before);
+});
+
+test("applyDeltas ignores credit and learned_limit deltas", () => {
+  const s = emptyState();
+  applySnapshot(s, snap({ characters: [char("a")], repos: [repo("r")], sessions: [session("ka", "a", "r")] }));
+  const before = JSON.stringify([...s.sessions], null, 0) + JSON.stringify([...s.characters]);
+  expect(applyDeltas(s, [
+    { type: "credit", at: 0, characterId: "a", repoId: "r", tasks: 1, tools: 1, failures: 0, xp: 5, levels: 0, compactions: 0, sidekicks: 0 },
+    { type: "learned_limit", model: "m", limit: 500_000 },
+  ])).toEqual([]);
+  expect(JSON.stringify([...s.sessions]) + JSON.stringify([...s.characters])).toBe(before);
+  expect(s.notices).toEqual([]);
+});
+
+test("tickerItems includes context_low notices", () => {
+  const low = { ...notice("1"), kind: "context_low" as const, text: "Bo's context is 82% full" };
+  expect(tickerItems([low])).toEqual(["Bo's context is 82% full"]);
 });
