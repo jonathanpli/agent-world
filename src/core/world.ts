@@ -172,8 +172,8 @@ export function createWorld(init: WorldInit, deps: WorldDeps): World {
   }
 
   /**
-   * Applies a context reading to a known session. The first reading only records the boundaries already in the tail;
-   * later ones apply each boundary newer than the last one seen, once. Never moves state, attention or lastEventAt.
+   * Applies a context reading to a known session. The first reading only records the boundaries already in the tail
+   * (the largest automatic one still teaches the learned limit); later ones apply each boundary newer than the last one seen, once. Never moves state, attention or lastEventAt.
    */
   function applyContext(s: Session, ev: AgentEvent): Delta[] {
     const prev = s.context;
@@ -192,6 +192,16 @@ export function createWorld(init: WorldInit, deps: WorldDeps): World {
       if (b.trigger === "auto" && s.model !== null && b.preTokens > (learnedLimits.get(s.model) ?? 0)) {
         learnedLimits.set(s.model, b.preTokens);
         learned.push({ type: "learned_limit", model: s.model, limit: b.preTokens });
+      }
+    }
+    // boundaries already in the tail on the first reading are not compactions of this session, but an automatic one still
+    // shows where the model's window filled: the largest teaches the learned limit
+    const seededAuto = prev === null ? boundaries.filter(b => b.trigger === "auto").map(b => b.preTokens) : [];
+    if (seededAuto.length > 0 && s.model !== null) {
+      const most = Math.max(...seededAuto);
+      if (most > (learnedLimits.get(s.model) ?? 0)) {
+        learnedLimits.set(s.model, most);
+        learned.push({ type: "learned_limit", model: s.model, limit: most });
       }
     }
     if (s.activity.length > CONFIG.activityMax) s.activity.splice(0, s.activity.length - CONFIG.activityMax);

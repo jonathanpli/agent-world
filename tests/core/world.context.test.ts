@@ -32,7 +32,7 @@ function bare(kind: EventKind, over: Partial<AgentEvent> = {}): AgentEvent {
 test("the first reading records the boundaries already in the tail without applying them", () => {
   const w = working();
   const activity = sess(w).activity.length;
-  const ds = w.apply(ctx(50_000, [b("u1", { preTokens: 40_000 }), b("u2", { trigger: "manual", preTokens: 45_000 })]));
+  const ds = w.apply(ctx(50_000, [b("u1", { trigger: "manual", preTokens: 40_000 }), b("u2", { trigger: "manual", preTokens: 45_000 })]));
   expect(sess(w).context).toEqual({ tokens: 50_000, peak: 50_000, limit: 200_000, estimated: true, compactions: 0, warned: false, seen: ["u1", "u2"] });
   expect(notices(ds)).toEqual([]);
   expect(credits(ds)).toEqual([]);
@@ -42,8 +42,28 @@ test("the first reading records the boundaries already in the tail without apply
 
 test("seeded boundaries on the first reading count toward peak", () => {
   const w = working();
-  w.apply(ctx(30_000, [b("u1", { preTokens: 120_000 }), b("u2", { preTokens: 90_000 })]));
+  w.apply(ctx(30_000, [b("u1", { trigger: "manual", preTokens: 120_000 }), b("u2", { trigger: "manual", preTokens: 90_000 })]));
   expect(sess(w).context).toMatchObject({ tokens: 30_000, peak: 120_000, limit: 200_000, compactions: 0 });
+});
+
+test("seeded auto boundaries teach the learned limit (the largest) but are not compactions", () => {
+  const w = working();
+  const activity = sess(w).activity.length;
+  const ds = w.apply(ctx(30_000, [b("u1", { preTokens: 150_000 }), b("u2", { preTokens: 170_000 }), b("u3", { trigger: "manual", preTokens: 190_000 })]));
+  expect(learned(ds)).toEqual([{ type: "learned_limit", model: MODEL, limit: 170_000 }]);
+  expect(sess(w).context).toMatchObject({ compactions: 0, peak: 190_000, limit: 200_000 });
+  expect(sess(w).activity).toHaveLength(activity);
+  expect(sess(w).pendingStats.compactions).toBe(0);
+  expect(credits(ds)).toEqual([]);
+  // not lowered, and not re-taught, by a later session's smaller seeded boundary
+  w.apply(ev("session_start", { at: 1000, sessionId: "s2", model: MODEL }));
+  expect(learned(w.apply(ctx(30_000, [b("v1", { preTokens: 160_000 })], { sessionId: "s2" })))).toEqual([]);
+});
+
+test("seeded auto boundaries teach nothing without a model", () => {
+  const w = newWorld();
+  w.apply(ev("session_start", { at: 1000 }));
+  expect(learned(w.apply(ctx(30_000, [b("u1", { preTokens: 170_000 })])))).toEqual([]);
 });
 
 test("a new auto boundary is applied once: count, line, stat, credit and learned limit", () => {
