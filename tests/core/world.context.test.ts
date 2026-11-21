@@ -32,12 +32,18 @@ function bare(kind: EventKind, over: Partial<AgentEvent> = {}): AgentEvent {
 test("the first reading records the boundaries already in the tail without applying them", () => {
   const w = working();
   const activity = sess(w).activity.length;
-  const ds = w.apply(ctx(50_000, [b("u1"), b("u2", { trigger: "manual" })]));
-  expect(sess(w).context).toEqual({ tokens: 50_000, limit: 200_000, estimated: true, compactions: 0, warned: false, seen: ["u1", "u2"] });
+  const ds = w.apply(ctx(50_000, [b("u1", { preTokens: 40_000 }), b("u2", { trigger: "manual", preTokens: 45_000 })]));
+  expect(sess(w).context).toEqual({ tokens: 50_000, peak: 50_000, limit: 200_000, estimated: true, compactions: 0, warned: false, seen: ["u1", "u2"] });
   expect(notices(ds)).toEqual([]);
   expect(credits(ds)).toEqual([]);
   expect(learned(ds)).toEqual([]);
   expect(sess(w).activity).toHaveLength(activity);
+});
+
+test("seeded boundaries on the first reading count toward peak", () => {
+  const w = working();
+  w.apply(ctx(30_000, [b("u1", { preTokens: 120_000 }), b("u2", { preTokens: 90_000 })]));
+  expect(sess(w).context).toMatchObject({ tokens: 30_000, peak: 120_000, limit: 200_000, compactions: 0 });
 });
 
 test("a new auto boundary is applied once: count, line, stat, credit and learned limit", () => {
@@ -155,6 +161,44 @@ test("notifyContext off: warned still flips, no notice", () => {
   expect(sess(w).context!.warned).toBe(true);
 });
 
+test("a stepped limit sticks after a compaction: no spurious low notice", () => {
+  const w = working();
+  w.apply(ctx(250_000));
+  expect(sess(w).context!.limit).toBe(500_000);
+  w.apply(ctx(30_000, [b("u1", { trigger: "manual", preTokens: 250_000, postTokens: 30_000 })]));
+  expect(sess(w).context).toMatchObject({ tokens: 30_000, limit: 500_000 });
+  const ds = w.apply(ctx(165_000, [b("u1", { trigger: "manual", preTokens: 250_000, postTokens: 30_000 })]));
+  expect(sess(w).context).toMatchObject({ tokens: 165_000, limit: 500_000, warned: false });
+  expect(notices(ds)).toEqual([]);
+});
+
+test("a learned limit below the default applies, and the low notice uses it", () => {
+  const w = working(newWorld({ learnedLimits: { [MODEL]: 180_000 } }));
+  for (const t of [50_000, 100_000, 143_999]) expect(notices(w.apply(ctx(t)))).toEqual([]);
+  expect(sess(w).context).toMatchObject({ limit: 180_000, estimated: true });
+  const ns = notices(w.apply(ctx(144_000)));
+  expect(ns).toHaveLength(1);
+  expect(ns[0]!.text).toContain("80%");
+  w.apply(ctx(150_000));
+  expect(sess(w).context!.limit).toBe(180_000);
+});
+
+test("a peak exactly at a step takes that step", () => {
+  const w = working();
+  w.apply(ctx(500_000));
+  expect(sess(w).context).toMatchObject({ peak: 500_000, limit: 500_000 });
+});
+
+test("peak never decreases", () => {
+  const w = working();
+  const peaks: number[] = [];
+  for (const [t, bs] of [[100_000, []], [250_000, []], [30_000, [b("u1", { preTokens: 260_000 })]], [60_000, [b("u1", { preTokens: 260_000 })]]] as const) {
+    w.apply(ctx(t, [...bs]));
+    peaks.push(sess(w).context!.peak);
+  }
+  expect(peaks).toEqual([100_000, 250_000, 260_000, 260_000]);
+});
+
 test("tokens above the limit step it up; above the last step the limit is the tokens", () => {
   const w = working();
   const ds = w.apply(ctx(250_000));
@@ -176,7 +220,8 @@ test("an override sets the limit and stops estimation; null restores it", () => 
   expect(sess(w).context).toMatchObject({ limit: 400_000, estimated: false });
   w.updateSettings({ contextLimitOverride: null });
   w.apply(ctx(60_000));
-  expect(sess(w).context).toMatchObject({ limit: 200_000, estimated: true });
+  // the 450 000 reading under the override still counts toward the peak
+  expect(sess(w).context).toMatchObject({ peak: 450_000, limit: 500_000, estimated: true });
 });
 
 test("updateSettings validates the context settings", () => {

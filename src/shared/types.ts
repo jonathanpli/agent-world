@@ -24,7 +24,9 @@ export type Sidekick = { id: string; type: string; since: number; lastAt: number
 export type LastTool = { kind: ToolKind; at: number; failed: boolean; agentId: string | null };
 /** The session's context window: the latest reading, the limit it is measured against, and compactions seen. */
 export type ContextInfo = {
-  tokens: number; limit: number;
+  tokens: number;
+  peak: number;                      // the highest count this session has shown (readings and boundary preTokens); never decreases
+  limit: number;
   estimated: boolean;                // false only when the limit is the owner's override
   compactions: number;               // compaction boundaries applied this session
   warned: boolean;                   // the running-low notice fired for this fill

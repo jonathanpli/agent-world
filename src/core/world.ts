@@ -33,17 +33,18 @@ const kTokens = (n: number): string => (n < 1000 ? String(n) : `${Math.round(n /
 
 /**
  * The limit a reading is measured against: the override if set, else the learned limit for the model, else the
- * default; an estimated limit the reading exceeds moves to the first step above it (or to the reading itself).
+ * default. A session whose peak has exceeded that estimate keeps the first step at or above its peak (or the peak
+ * itself past the last step), so the limit sticks after a compaction.
  */
-function contextLimit(tokens: number, override: number | null, learned: number | undefined): { limit: number; estimated: boolean } {
+function contextLimit(peak: number, override: number | null, learned: number | undefined): { limit: number; estimated: boolean } {
   if (override !== null) return { limit: override, estimated: false };
   const base = learned ?? CONFIG.context.defaultLimit;
-  if (tokens <= base) return { limit: base, estimated: true };
-  return { limit: CONFIG.context.steps.find(step => step > tokens) ?? tokens, estimated: true };
+  if (peak <= base) return { limit: base, estimated: true };
+  return { limit: CONFIG.context.steps.find(step => step >= peak) ?? peak, estimated: true };
 }
 
 const sameContext = (a: ContextInfo, b: ContextInfo): boolean =>
-  a.tokens === b.tokens && a.limit === b.limit && a.estimated === b.estimated && a.compactions === b.compactions &&
+  a.tokens === b.tokens && a.peak === b.peak && a.limit === b.limit && a.estimated === b.estimated && a.compactions === b.compactions &&
   a.warned === b.warned && a.seen.length === b.seen.length && a.seen.every((u, i) => u === b.seen[i]);
 
 export function createWorld(init: WorldInit, deps: WorldDeps): World {
@@ -197,7 +198,9 @@ export function createWorld(init: WorldInit, deps: WorldDeps): World {
     const newSeen = [...seen, ...(prev === null ? boundaries : fresh).map(b => b.uuid).filter(u => !seen.includes(u))].slice(-CONFIG.context.seenMax);
 
     const tokens = ev.contextTokens ?? fresh.at(-1)?.postTokens ?? prev?.tokens ?? 0;
-    const { limit, estimated } = contextLimit(tokens, settings.contextLimitOverride, s.model === null ? undefined : learnedLimits.get(s.model));
+    // the highest count the session has shown: every reading and every applied (or, on the first reading, seeded) boundary
+    const peak = Math.max(prev?.peak ?? 0, tokens, ...(prev === null ? boundaries : fresh).map(b => b.preTokens));
+    const { limit, estimated } = contextLimit(peak, settings.contextLimitOverride, s.model === null ? undefined : learnedLimits.get(s.model));
     const pct = settings.contextWarnPct;
     // whole-number comparisons: tokens / limit against pct / 100
     if (warned && tokens * 100 < (pct - CONFIG.context.rearmPoints) * limit) warned = false;
@@ -211,7 +214,7 @@ export function createWorld(init: WorldInit, deps: WorldDeps): World {
       }
     }
 
-    const next: ContextInfo = { tokens, limit, estimated, compactions, warned, seen: newSeen };
+    const next: ContextInfo = { tokens, peak, limit, estimated, compactions, warned, seen: newSeen };
     if (prev !== null && applied === 0 && notices.length === 0 && sameContext(prev, next)) return [];
     s.context = next;
     const out: Delta[] = [];
