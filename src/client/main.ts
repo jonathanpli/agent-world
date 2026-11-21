@@ -7,6 +7,7 @@ import { mount as mountInspector } from "./ui/inspector";
 import { mount as mountRoster } from "./ui/roster";
 import { mount as mountSettings } from "./ui/settings";
 import { mount as mountTicker } from "./ui/ticker";
+import { mount as mountToasts } from "./ui/toasts";
 import type { Tier } from "../shared/types";
 
 const state = emptyState();
@@ -29,6 +30,7 @@ const roster = mountRoster($("roster"), { state, selected: () => selected, selec
 const inspector = mountInspector(inspectorRoot, { state, selected: () => selected, select, tierTitle, theme: () => getTheme(state.settings.theme) });
 const ticker = mountTicker($("ticker"), { state });
 const settings = mountSettings(settingsDialog, { state });
+const toasts = mountToasts($("toasts"));
 
 for (const t of THEMES) themeSelect.add(new Option(t.name, t.id));
 let appliedTheme: string | null = null;
@@ -98,7 +100,9 @@ connect({
     }
     for (const n of notices) {
       const actorId = n.characterId ?? n.sessionKey;
-      deliver(n, state.settings, () => { if (actorId !== null) select(actorId); });
+      const show = (): void => { if (actorId !== null) select(actorId); };
+      deliver(n, state.settings, show);
+      toasts.show(n, state.settings, show);
       if (n.kind === "level_up" && n.characterId !== null) engine.burst("levelUp", n.characterId);
     }
     sync();

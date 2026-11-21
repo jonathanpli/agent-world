@@ -1,5 +1,5 @@
 import { afterEach, expect, test, vi } from "vitest";
-import { attentionCount, deliver, notificationFor, tabTitle } from "../../src/client/notify";
+import { attentionCount, deliver, notificationFor, tabTitle, toastFor, visibleToasts } from "../../src/client/notify";
 import { applySnapshot, emptyState } from "../../src/client/state";
 import { CONFIG } from "../../src/shared/config";
 import type { Notice, NoticeKind, Settings } from "../../src/shared/types";
@@ -131,4 +131,20 @@ test("deliver never throws when Notification and AudioContext are absent or brok
   expect(() => deliver(n("needs_input"), { ...on, sound: true }, () => {})).not.toThrow();
   expect(warn).toHaveBeenCalledTimes(2);
   warn.mockRestore();
+});
+
+test("toastFor toasts needs_input and done under their notification toggles, level_up always, achievements never", () => {
+  expect(toastFor(n("needs_input"), on)).toBe("Bo needs you in api-server");
+  expect(toastFor(n("done"), on)).toBe("Bo needs you in api-server");
+  expect(toastFor({ ...n("level_up"), text: "Bo reached level 3" }, on)).toBe("Bo reached level 3");
+  expect(toastFor(n("level_up"), { ...on, notifyNeedsInput: false, notifyDone: false })).not.toBeNull();
+  expect(toastFor(n("needs_input"), { ...on, notifyNeedsInput: false })).toBeNull();
+  expect(toastFor(n("done"), { ...on, notifyDone: false })).toBeNull();
+  expect(toastFor(n("achievement"), on)).toBeNull();
+});
+
+test("visibleToasts keeps the newest CONFIG.client.toastMax", () => {
+  expect(CONFIG.client.toastMax).toBe(3);
+  expect(visibleToasts([1, 2, 3, 4, 5])).toEqual([3, 4, 5]);
+  expect(visibleToasts([1])).toEqual([1]);
 });

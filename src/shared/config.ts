@@ -66,6 +66,8 @@ export const CONFIG = {
     particleFadeS: 0.5,
     catSpeed: 16,                                 // px/s, the office cat
     tickerMax: 8,                                 // notice texts shown in the ticker
+    toastMs: 6_000,                               // an in-game toast stays this long
+    toastMax: 3,                                  // toasts visible at once; the oldest goes first
     chime: { tonesHz: [880, 1318.5], toneS: 0.12, gapS: 0.05, gain: 0.08 },   // two short sine tones
     previewScale: 4,                              // inspector Look preview: device px per sprite px
     clockMs: 1_000,                               // inspector durations refresh

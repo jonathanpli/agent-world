@@ -14,6 +14,17 @@ export function notificationFor(n: Notice, settings: Settings): { title: string;
   return { title: `${n.characterName} ${verb}${where}`, body: n.text };
 }
 
+/** The in-game toast text for a notice: needs_input and done under the same toggles as `notificationFor`, level_up always, else null. */
+export function toastFor(n: Notice, settings: Settings): string | null {
+  if (n.kind === "level_up") return n.text;
+  return notificationFor(n, settings) === null ? null : n.text;
+}
+
+/** The toasts to keep on screen: the newest CONFIG.client.toastMax of `all` (oldest first). */
+export function visibleToasts<T>(all: T[]): T[] {
+  return all.slice(-CONFIG.client.toastMax);
+}
+
 /** Sessions with attention. */
 export function attentionCount(s: ClientState): number {
   let k = 0;
