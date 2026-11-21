@@ -116,6 +116,7 @@ test("held XP is dropped when the session binds to a temp (roster full)", () => 
 test("notices for an unknown session name it as a new arrival", () => {
   const w = newWorld();
   w.apply(bare("session_start", { at: 1000 }));
+  w.apply(bare("prompt", { at: 1500 }));
   const [n] = noticesOf(w.apply(bare("needs_input", { at: 2000 })), "needs_input");
   expect(n).toMatchObject({ characterId: null, characterName: ARRIVAL_NAME, text: `${ARRIVAL_NAME} needs you in a` });
   expect(sess(w)[0]).toMatchObject({ state: "needs_input", attention: true, tierKnown: false });
@@ -181,9 +182,9 @@ test("fix 1 (2b): a second prompt after the grace period binds; the first prompt
 test("fix 1 (3): before any prompt there is no grace expiry", () => {
   const w = newWorld();
   w.apply(bare("session_start", { at: 0 }));
-  w.apply(bare("needs_input", { at: 60_000 }));
+  w.apply(bare("needs_input", { at: 60_000 }));     // idle_prompt while still waiting for the first prompt
   expect(chars(w)).toEqual([]);
-  expect(sess(w)[0]).toMatchObject({ tierKnown: false, graceSince: null, characterId: null, state: "needs_input" });
+  expect(sess(w)[0]).toMatchObject({ tierKnown: false, graceSince: null, characterId: null, state: "idle" });
 });
 
 test("fix 1 (4): a session first seen mid-way starts the grace clock at its first event", () => {

@@ -97,6 +97,7 @@ test("notices are throttled per session and kind", () => {
   expect(n(w.apply(ev("needs_input", { at: 0 })))).toBe(1);
   expect(n(w.apply(ev("needs_input", { at: 9_999 })))).toBe(0);
   expect(n(w.apply(ev("task_done", { at: 9_999 })))).toBe(1);     // different kind
+  w.apply(ev("tool", { at: 9_999 }));                               // back at work, so needs_input asks again
   expect(n(w.apply(ev("needs_input", { at: 10_000 })))).toBe(1);
 });
 
@@ -185,4 +186,58 @@ test("retiring when the cap is full makes the session a temp", () => {
   expect(s.tempLook).not.toBeNull();
   expect(d).toContainEqual({ type: "session", session: s });
   expect(chars(w).filter(c => !c.retired)).toHaveLength(1);
+});
+
+const kindNotices = (d: Delta[]) => d.flatMap(x => (x.type === "notice" && (x.notice.kind === "needs_input" || x.notice.kind === "done") ? [x.notice.kind] : []));
+
+test("needs_input after Stop (idle_prompt) is an activity line only: stays done, one notice, ack sticks", () => {
+  const w = newWorld(); w.apply(ev("session_start")); w.apply(ev("prompt", { at: 1100 }));
+  const notices = kindNotices(w.apply(ev("task_done", { at: 2000 })));
+  w.ack("t:s1");
+  const before = sess(w)[0]!;
+  const d = w.apply(ev("needs_input", { at: 62_000, detail: { reason: "Claude is waiting for your input" } }));
+  notices.push(...kindNotices(d));
+  expect(notices).toEqual(["done"]);
+  const s = sess(w)[0]!;
+  expect(s).toMatchObject({ state: "done", stateSince: before.stateSince, attention: false });
+  expect(s.activity.at(-1)).toEqual({ at: 62_000, kind: "needs_input", text: "Claude is waiting for your input" });
+  w.tick(2000 + CONFIG.doneToIdleMs); expect(sess(w)[0]!.state).toBe("idle");    // the done → idle rule still fires
+});
+
+test("needs_input while idle stays idle with no notice and no attention", () => {
+  const w = newWorld(); w.apply(ev("session_start"));
+  const d = w.apply(ev("needs_input", { at: 5000 }));
+  expect(kindNotices(d)).toEqual([]);
+  expect(sess(w)[0]).toMatchObject({ state: "idle", attention: false });
+  expect(sess(w)[0]!.activity.at(-1)?.kind).toBe("needs_input");
+});
+
+test("needs_input while working still asks for the user", () => {
+  const w = newWorld(); w.apply(ev("session_start")); w.apply(ev("prompt", { at: 1100 }));
+  const d = w.apply(ev("needs_input", { at: 1200 }));
+  expect(kindNotices(d)).toEqual(["needs_input"]);
+  expect(sess(w)[0]).toMatchObject({ state: "needs_input", attention: true });
+});
+
+test("session_start for an existing session (compact, resume) leaves its state alone", () => {
+  const w = newWorld(); w.apply(ev("session_start")); w.apply(ev("prompt", { at: 1100 })); w.apply(ev("tool", { at: 1200 }));
+  w.apply(ev("session_start", { at: 1300, model: "claude-sonnet-5-5" }));
+  expect(sess(w)[0]).toMatchObject({ state: "working", stateSince: 1100, lastEventAt: 1300, model: "claude-sonnet-5-5" });
+});
+
+test("end dismisses a live session through the normal end path", () => {
+  const w = newWorld(); w.apply(ev("session_start")); w.apply(ev("prompt", { at: 1100 }));
+  expect(w.end("t:missing", 2000)).toEqual([]);
+  expect(w.end("t:s1", 2000)).toContainEqual({ type: "session_removed", key: "t:s1" });
+  expect(sess(w)).toHaveLength(0);
+});
+
+test("ending an arriving session that earned XP binds it at the default tier and credits it first", () => {
+  const w = newWorld();
+  w.apply(ev("session_start", { tier: undefined })); w.apply(ev("prompt", { at: 1100 }));
+  expect(sess(w)[0]!.tierKnown).toBe(false);
+  const d = w.end("t:s1", 2000);
+  expect(chars(w)).toHaveLength(1);
+  expect(chars(w)[0]).toMatchObject({ tier: CONFIG.defaultTier, xp: CONFIG.xp.prompt });
+  expect(d.at(-1)).toEqual({ type: "session_removed", key: "t:s1" });
 });

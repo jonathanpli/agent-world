@@ -12,6 +12,7 @@ export type World = {
   apply(ev: AgentEvent): Delta[];      // ev.repoPath is already the resolved repo root
   tick(now: number): Delta[];
   ack(sessionKey: string): Delta[];
+  end(sessionKey: string, at: number): Delta[];   // dismisses a session as SessionEnd would; [] for an unknown key
   updateCharacter(id: string, patch: { name?: string; look?: Look; retired?: boolean }): Delta[];  // throws Error on invalid patch
   updateSettings(patch: Partial<Settings>): Delta[];                                               // throws Error on invalid patch
   snapshot(now: number, demo: boolean): Snapshot;
@@ -204,7 +205,10 @@ export function createWorld(init: WorldInit, deps: WorldDeps): World {
 
     const out: Delta[] = [];
     const repo = repoFor(ev.repoPath, ev.at, out);
+    const created = s === undefined;
     if (s === undefined) s = createSession(ev, key, repo, out);
+    // Claude Code's idle_prompt arrives about a minute after a session stops: at rest it is only an activity line
+    const atRest = !created && (s.state === "done" || s.state === "idle");
 
     s.repoId = repo.id;
     s.lastEventAt = ev.at;
@@ -224,10 +228,13 @@ export function createWorld(init: WorldInit, deps: WorldDeps): World {
 
     const notices: Delta[] = [];
     switch (ev.kind) {
-      case "session_start": setState(s, "idle", ev.at); break;
+      case "session_start": break;     // a new session starts idle; compact or resume of a live one keeps its state
       case "prompt": setState(s, "working", ev.at); s.attention = false; s.task = ev.detail?.text ?? null; break;
       case "tool": setState(s, "working", ev.at); s.attention = false; break;
-      case "needs_input": setState(s, "needs_input", ev.at); s.attention = true; notices.push(...notice(s, "needs_input", ev.at, repo)); break;
+      case "needs_input":
+        if (atRest) break;
+        setState(s, "needs_input", ev.at); s.attention = true; notices.push(...notice(s, "needs_input", ev.at, repo));
+        break;
       case "task_done":
         setState(s, "done", ev.at); s.attention = true;
         if (ev.detail?.summary !== undefined) s.lastSummary = ev.detail.summary;
@@ -266,6 +273,14 @@ export function createWorld(init: WorldInit, deps: WorldDeps): World {
     if (s === undefined) return [];
     s.attention = false;
     return [sessionDelta(s)];
+  }
+
+  function end(sessionKey: string, at: number): Delta[] {
+    const s = sessions.get(sessionKey);
+    if (s === undefined) return [];
+    const out: Delta[] = [];
+    endSession(s, at, out);
+    return out;
   }
 
   function updateCharacter(id: string, patch: { name?: string; look?: Look; retired?: boolean }): Delta[] {
@@ -323,5 +338,5 @@ export function createWorld(init: WorldInit, deps: WorldDeps): World {
     });
   }
 
-  return { apply, tick, ack, updateCharacter, updateSettings, snapshot };
+  return { apply, tick, ack, end, updateCharacter, updateSettings, snapshot };
 }
