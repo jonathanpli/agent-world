@@ -70,3 +70,12 @@ export type Delta =
   /** An automatic compaction raised the learned context limit of `model` (tokens). */
   | { type: "learned_limit"; model: string; limit: number };
 export type Snapshot = { serverTime: number; demo: boolean; characters: Character[]; repos: Repo[]; sessions: Session[]; settings: Settings };
+
+export type RecapTotals = { tasks: number; tools: number; failures: number; xp: number; levels: number; compactions: number; sidekicks: number };
+export type Recap = {
+  day: string; today: string; totals: RecapTotals;
+  characters: ({ characterId: string; name: string } & RecapTotals)[];   // xp desc; excludes temp
+  repos: ({ repoId: string; name: string } & RecapTotals)[];             // tasks desc, then tools
+  mvpCharacterId: string | null;                                         // most xp, > 0; ties -> most tasks -> name
+  streak: number; prevDay: string | null; nextDay: string | null;
+};

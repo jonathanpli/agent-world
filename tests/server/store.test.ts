@@ -247,3 +247,17 @@ test("an existing data directory keeps its mode", () => {
   openStore(join(dir, "w.db")).close();
   expect(statSync(dir).mode & 0o777).toBe(0o755);
 });
+
+test("a malformed learnedLimits value loads as {} (or its valid entries) and a new limit can still be saved", () => {
+  const dir = mkdtempSync(join(tmpdir(), "aw-")); const path = join(dir, "w.db");
+  const store = openStore(path);
+  const db = new DatabaseSync(path);
+  const set = (v: string) => db.prepare("INSERT INTO settings (key, value) VALUES ('learnedLimits', ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value").run(v);
+  for (const v of ["[1,2]", "null", "7", '"x"', "{not json"]) { set(v); expect(store.load().learnedLimits).toEqual({}); }
+  set('{"m":150000,"bad":"x","worse":null}');
+  expect(store.load().learnedLimits).toEqual({ m: 150_000 });
+  set("[1]");
+  store.persist([{ type: "learned_limit", model: "n", limit: 200_000 }]);
+  expect(store.load().learnedLimits).toEqual({ n: 200_000 });
+  db.close(); store.close();
+});

@@ -37,4 +37,13 @@ export const MIGRATIONS: string[] = [
   `
   ALTER TABLE sessions ADD COLUMN extras TEXT NOT NULL DEFAULT '{}';
   `,
+  // One row per day, character ("temp" for a temp) and repo, summed from `credit` deltas. Never pruned.
+  `
+  CREATE TABLE daily (
+    day TEXT NOT NULL, character_id TEXT NOT NULL, repo_id TEXT NOT NULL,
+    tasks INTEGER NOT NULL DEFAULT 0, tools INTEGER NOT NULL DEFAULT 0, failures INTEGER NOT NULL DEFAULT 0,
+    xp INTEGER NOT NULL DEFAULT 0, levels INTEGER NOT NULL DEFAULT 0, compactions INTEGER NOT NULL DEFAULT 0,
+    sidekicks INTEGER NOT NULL DEFAULT 0, PRIMARY KEY (day, character_id, repo_id)
+  );
+  `,
 ];

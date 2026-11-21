@@ -7,6 +7,7 @@ import { tierForModel } from "../adapters/claudeCode";
 import { createWorld } from "../core/world";
 import { CONFIG } from "../shared/config";
 import type { AgentEvent, Delta, Look, Settings } from "../shared/types";
+import { isDay, localDay } from "./recap";
 import { createRepoResolver } from "./repoResolver";
 import type { Store } from "./store";
 import { readTranscript as readTranscriptFile, type TranscriptInfo } from "./transcript";
@@ -290,6 +291,13 @@ export function createApp(opts: AppOptions): App {
     const badEscape = (): void => sendJson(res, 400, { error: "malformed URL escape" });
 
     if (method === "GET" && path === "/events") return openStream(req, res);
+    if (method === "GET" && path === "/api/recap") {
+      if (origin !== undefined && !isLocal(origin, true)) { sendStatus(res, 403); return; }
+      const today = localDay(now());
+      const day = new URL(req.url ?? "/", "http://localhost").searchParams.get("day") ?? today;
+      if (!isDay(day)) return sendJson(res, 400, { error: "day must be YYYY-MM-DD" });
+      return sendJson(res, 200, store.recap(day, today));
+    }
     if (method === "GET" && path === "/api/snapshot") return sendJson(res, 200, world.snapshot(now(), demo));
     if (method === "PATCH" && (m = path.match(/^\/api\/characters\/([^/]+)$/))) {
       const id = decode(m[1]!);

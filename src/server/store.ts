@@ -2,16 +2,18 @@ import { chmodSync, closeSync, mkdirSync, openSync } from "node:fs";
 import { dirname } from "node:path";
 import { DatabaseSync, type SQLInputValue } from "node:sqlite";
 import { CONFIG } from "../shared/config";
-import type { AgentEvent, Character, Delta, Repo, Session, Settings } from "../shared/types";
+import type { AgentEvent, Character, Delta, Recap, Repo, Session, Settings } from "../shared/types";
 import type { WorldInit } from "../core/world";
 import { MIGRATIONS } from "./migrations";
+import { buildRecap, localDay, TEMP_ID } from "./recap";
 
 export type Store = {
   load(): WorldInit;                    // settings default to CONFIG.defaultSettings when absent; learned limits to {}
-  persist(deltas: Delta[]): void;       // one transaction; `notice` and (until the recap) `credit` deltas are not stored
+  persist(deltas: Delta[]): void;       // one transaction; `notice` deltas are not stored, `credit` deltas add to the daily recap
   logEvent(ev: AgentEvent): void;
   pruneEvents(olderThan: number): void;
   eventCount(): number;
+  recap(day: string, today: string): Recap;
   close(): void;
 };
 
@@ -73,6 +75,12 @@ export function openStore(path: string): Store {
       attention = excluded.attention, activity = excluded.activity, tier_known = excluded.tier_known,
       pending_xp = excluded.pending_xp, pending_stats = excluded.pending_stats, grace_since = excluded.grace_since,
       extras = excluded.extras`);
+  const upsertDaily = db.prepare(`
+    INSERT INTO daily (day, character_id, repo_id, tasks, tools, failures, xp, levels, compactions, sidekicks)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    ON CONFLICT(day, character_id, repo_id) DO UPDATE SET tasks = tasks + excluded.tasks, tools = tools + excluded.tools,
+      failures = failures + excluded.failures, xp = xp + excluded.xp, levels = levels + excluded.levels,
+      compactions = compactions + excluded.compactions, sidekicks = sidekicks + excluded.sidekicks`);
   const deleteSession = db.prepare("DELETE FROM sessions WHERE key = ?");
   const upsertSetting = db.prepare(`
     INSERT INTO settings (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value`);
@@ -104,7 +112,12 @@ export function openStore(path: string): Store {
 
   function learnedLimits(): Record<string, number> {
     const row = getSetting.get(LEARNED_LIMITS_KEY) as { value: string } | undefined;
-    return row === undefined ? {} : JSON.parse(row.value);
+    if (row === undefined) return {};
+    let parsed: unknown;
+    try { parsed = JSON.parse(row.value); } catch { return {}; }
+    if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) return {};
+    // keep only the valid entries; a malformed value is dropped, never thrown on
+    return Object.fromEntries(Object.entries(parsed).filter(([, v]) => typeof v === "number" && Number.isFinite(v))) as Record<string, number>;
   }
 
   /** Keeps the larger of the stored and the new limit for the model. */
@@ -170,7 +183,9 @@ export function openStore(path: string): Store {
           case "session_removed": deleteSession.run(d.key); break;
           case "settings": saveSettings(d.settings); break;
           case "notice": break;
-          case "credit": break;   // not stored until the recap table exists
+          case "credit":
+            upsertDaily.run(localDay(d.at), d.characterId ?? TEMP_ID, d.repoId, d.tasks, d.tools, d.failures, d.xp, d.levels, d.compactions, d.sidekicks);
+            break;
           case "learned_limit": saveLearnedLimit(d.model, d.limit); break;
         }
       }
@@ -186,6 +201,7 @@ export function openStore(path: string): Store {
     persist,
     logEvent: ev => { insertEvent.run(ev.at, ev.source, ev.sessionId, ev.repoPath, ev.kind, JSON.stringify(ev)); },
     pruneEvents: olderThan => { deleteEventsBefore.run(olderThan); },
+    recap: (day, today) => buildRecap(db, day, today),
     eventCount: () => (countEvents.get() as { n: number }).n,
     close: () => db.close(),
   };

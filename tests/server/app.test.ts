@@ -618,3 +618,18 @@ test("close() leaves no pending timers", async () => {
   await advance(CONFIG.contextReadMs);
   expect(rig.reads).toBe(1);
 });
+
+test("GET /api/recap: today by default, a given day, 400 on a malformed day, 403 for a foreign Host or Origin", async () => {
+  const NOW = new Date(2026, 5, 10, 12).getTime();
+  const { base, store } = await start({ now: () => NOW });
+  store.persist([{ type: "credit", at: NOW, characterId: null, repoId: "r", tasks: 2, tools: 3, failures: 0, xp: 0, levels: 0, compactions: 0, sidekicks: 0 }]);
+  const res = await fetch(`${base}/api/recap`);
+  expect(res.status).toBe(200);
+  const r = await res.json() as { day: string; today: string; totals: { tasks: number }; streak: number };
+  expect([r.day, r.today, r.totals.tasks, r.streak]).toEqual(["2026-06-10", "2026-06-10", 2, 1]);
+  expect(((await (await fetch(`${base}/api/recap?day=2026-06-09`)).json()) as { totals: { tasks: number } }).totals.tasks).toBe(0);
+  for (const bad of ["2026-13-40", "x", "2026-02-30", ""]) expect((await fetch(`${base}/api/recap?day=${bad}`)).status).toBe(400);
+  expect((await raw(base, "GET", "/api/recap", { host: "evil.example:4317" })).status).toBe(403);
+  expect((await raw(base, "GET", "/api/recap", { host: "127.0.0.1:4317", origin: "https://evil.example" })).status).toBe(403);
+  expect((await raw(base, "GET", "/api/recap", { host: "127.0.0.1:4317" })).status).toBe(200);
+});
