@@ -196,3 +196,18 @@ test("unknown routes and static files", async () => {
   expect((await fetch(`${base}/`)).status).toBe(404);
   expect((await send(base, "DELETE", "/api/snapshot")).status).toBe(404);
 });
+
+test("malformed URL escapes: 400 on the API, 204 on ingest", async () => {
+  const { base } = await start();
+  const ack = await send(base, "POST", "/api/sessions/%E0%A4%A/ack");
+  expect(ack.status).toBe(400);
+  expect(typeof ((await ack.json()) as { error: unknown }).error).toBe("string");
+  const patch = await send(base, "PATCH", "/api/characters/%E0%A4%A", { name: "Q" });
+  expect(patch.status).toBe(400);
+  expect(typeof ((await patch.json()) as { error: unknown }).error).toBe("string");
+  const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+  expect((await ingest(base, fx("SessionStart"), "%E0%A4%A")).status).toBe(204);
+  expect(warn).toHaveBeenCalledTimes(1);
+  warn.mockRestore();
+  expect((await snapshot(base)).sessions).toHaveLength(0);
+});

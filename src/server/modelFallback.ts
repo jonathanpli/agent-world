@@ -1,7 +1,7 @@
 import { open } from "node:fs/promises";
 import { CONFIG } from "../shared/config";
 
-/** Reads the tail of a Claude Code transcript and returns the most recent assistant `message.model`. Never rejects. */
+/** Reads the tail of a Claude Code transcript and returns the most recent real assistant `message.model`. Never rejects. */
 export async function modelFromTranscript(path: string): Promise<string | null> {
   try {
     const fh = await open(path, "r");
@@ -21,7 +21,9 @@ export async function modelFromTranscript(path: string): Promise<string | null> 
       try { entry = JSON.parse(lines[i]!); } catch { continue; }
       if (typeof entry !== "object" || entry === null) continue;
       const { type, message } = entry as { type?: unknown; message?: { model?: unknown } };
-      if (type === "assistant" && typeof message?.model === "string") return message.model;
+      const model = message?.model;
+      // Placeholders such as "<synthetic>" are not real model ids: skip them and keep scanning.
+      if (type === "assistant" && typeof model === "string" && model !== "" && !model.startsWith("<")) return model;
     }
     return null;
   } catch {

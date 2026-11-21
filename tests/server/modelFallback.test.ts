@@ -36,3 +36,11 @@ test("missing file, empty file, junk lines → null", async () => {
   expect(await modelFromTranscript(file("empty.jsonl", ""))).toBeNull();
   expect(await modelFromTranscript(file("junk.jsonl", "not json\n{bad\n" + line({ type: "assistant", message: { model: 7 } }) + line({ type: "assistant" }) + "\n"))).toBeNull();
 });
+
+test("placeholder models such as <synthetic> are skipped", async () => {
+  expect(await modelFromTranscript(file("s.jsonl",
+    line({ type: "assistant", message: { model: "claude-opus-5-5" } }) +
+    line({ type: "assistant", message: { model: "<synthetic>" } })))).toBe("claude-opus-5-5");
+  expect(await modelFromTranscript(file("only.jsonl", line({ type: "assistant", message: { model: "<synthetic>" } })))).toBeNull();
+  expect(await modelFromTranscript(file("blank.jsonl", line({ type: "assistant", message: { model: "" } })))).toBeNull();
+});

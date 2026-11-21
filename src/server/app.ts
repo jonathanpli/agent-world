@@ -54,6 +54,11 @@ function sendStatus(res: ServerResponse, status: number): void {
   res.end();
 }
 
+/** decodeURIComponent that returns null instead of throwing on a malformed escape. */
+function decode(s: string): string | null {
+  try { return decodeURIComponent(s); } catch { return null; }
+}
+
 const isRecord = (v: unknown): v is Record<string, unknown> => typeof v === "object" && v !== null && !Array.isArray(v);
 
 export function createApp(opts: AppOptions): App {
@@ -200,12 +205,19 @@ export function createApp(opts: AppOptions): App {
     const path = new URL(req.url ?? "/", "http://localhost").pathname;
     let m: RegExpMatchArray | null;
 
-    if (method === "POST" && (m = path.match(/^\/ingest\/([^/]+)$/))) return ingest(req, res, decodeURIComponent(m[1]!));
+    const badEscape = (): void => sendJson(res, 400, { error: "malformed URL escape" });
+
+    if (method === "POST" && (m = path.match(/^\/ingest\/([^/]+)$/))) return ingest(req, res, decode(m[1]!) ?? m[1]!);
     if (method === "GET" && path === "/events") return openStream(req, res);
     if (method === "GET" && path === "/api/snapshot") return sendJson(res, 200, world.snapshot(now(), demo));
-    if (method === "PATCH" && (m = path.match(/^\/api\/characters\/([^/]+)$/))) return patchCharacter(req, res, decodeURIComponent(m[1]!));
+    if (method === "PATCH" && (m = path.match(/^\/api\/characters\/([^/]+)$/))) {
+      const id = decode(m[1]!);
+      return id === null ? badEscape() : patchCharacter(req, res, id);
+    }
     if (method === "POST" && (m = path.match(/^\/api\/sessions\/([^/]+)\/ack$/))) {
-      commit(world.ack(decodeURIComponent(m[1]!)));
+      const key = decode(m[1]!);
+      if (key === null) return badEscape();
+      commit(world.ack(key));
       return sendStatus(res, 204);
     }
     if (method === "PUT" && path === "/api/settings") return putSettings(req, res);
