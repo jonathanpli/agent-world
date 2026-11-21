@@ -1,8 +1,10 @@
 import { levelForXp } from "../../core/levels";
 import { CONFIG } from "../../shared/config";
-import type { CharState, Effort, Look, Tier } from "../../shared/types";
+import type { CharState, Effort, Look, Session, Tier } from "../../shared/types";
 import { activeRepos, unboundLabel, type ClientState } from "../state";
-import { actorAt, safeLayout, sessionsByRepo, stepActors, syncActors, type Actor, type Layout } from "./actors";
+import { contextUsePct, gaugeStep, nextAction, nextCompaction, type ActiveAction, type CompactionWatch } from "./actions";
+import { actorAt, safeLayout, sessionsByActor, sessionsByRepo, stepActors, syncActors, type Actor, type Layout } from "./actors";
+import { drawAction, drawCompaction, drawGauge, drawSidekicks } from "./extras";
 import { drawBubble, drawEdgeButtons, drawPlate, drawSelection, edgeButtons, layoutPlates, plateText } from "./overlay";
 import { createFader } from "./fade";
 import { drawParticles, stepParticles } from "./particles";
@@ -58,6 +60,8 @@ export function startEngine(canvas: HTMLCanvasElement, state: ClientState): Engi
   let layout: Layout = { screens: 1, places: new Map() };
   const actors = new Map<string, Actor>();
   const anim = new Map<string, { state: CharState; since: number; frame: number }>();
+  const actions = new Map<string, ActiveAction>();          // by actor id: the tool action playing
+  const compactions = new Map<string, CompactionWatch>();   // by actor id: compactions seen, and the moment playing
   let particles: Particle[] = [];
   let hovered: string | null = null;
   let screen = 0;
@@ -152,6 +156,20 @@ export function startEngine(canvas: HTMLCanvasElement, state: ClientState): Engi
     }
     for (const id of anim.keys()) if (!who.has(id)) anim.delete(id);
 
+    // per session-bound actor: its work spot, and the tool action and compaction moment it is playing
+    const bound = new Map<string, { spot: Point; session: Session }>();
+    for (const [id, session] of sessionsByActor(state)) {
+      const a = actors.get(id);
+      if (a === undefined || !who.has(id)) continue;
+      bound.set(id, { spot: { x: Math.round(a.target.x), y: Math.round(a.target.y) }, session });
+      const act = nextAction(actions.get(id) ?? null, session.lastTool, wall);
+      if (act === null) actions.delete(id); else actions.set(id, act);
+      if (session.context !== null) compactions.set(id, nextCompaction(compactions.get(id), session.context.compactions, wall));
+    }
+    for (const id of actions.keys()) if (!bound.has(id)) actions.delete(id);
+    for (const id of compactions.keys()) if (!bound.has(id)) compactions.delete(id);
+    const frameSince = (ms: number): number => Math.floor(Math.max(0, (wall - ms) / 1000) * CONFIG.client.animFps);
+
     const goal = screen * VIEW.w;
     camX += (goal - camX) * Math.min(1, dt * CONFIG.client.cameraLerp);
     if (Math.abs(goal - camX) < 0.5) camX = goal;
@@ -183,7 +201,13 @@ export function startEngine(canvas: HTMLCanvasElement, state: ClientState): Engi
         ctx.restore();
       }
 
+      for (const { spot, session } of bound.values()) {
+        const c = session.context;
+        if (c !== null) drawGauge(ctx, theme, fallback, spot, gaugeStep(c), contextUsePct(c) >= state.settings.contextWarnPct, t);
+      }
+
       const bob = CONFIG.client.bob[active.movement];
+      const slots = new Map<string, Map<string, Point>>();   // by actor id: where each drawn sidekick stands
       const drawn: { id: string; at: Point; w: Who }[] = [];
       for (const a of [...actors.values()].sort((p, q) => p.pos.y - q.pos.y)) {
         const w = who.get(a.id);
@@ -193,6 +217,23 @@ export function startEngine(canvas: HTMLCanvasElement, state: ClientState): Engi
         const f = Math.floor(anim.get(a.id)?.frame ?? 0);
         draw(th => th.drawCharacter(ctx, at, w.look, w.tier, w.state, w.effort, f, a.facing, a.moving));
         drawn.push({ id: a.id, at, w });
+        const b = bound.get(a.id);
+        if (b !== undefined && b.session.sidekicks.length > 0) {
+          const busy = b.session.state === "needs_input" ? null : actions.get(a.id)?.agentId ?? null;
+          slots.set(a.id, drawSidekicks(ctx, theme, fallback, b.spot, b.session.sidekicks, busy, wall, t));
+        }
+      }
+
+      // a tool action plays on the sidekick it names when that one is drawn, else on the actor; never while it needs you
+      for (const [id, act] of actions) {
+        const b = bound.get(id);
+        if (b === undefined || b.session.state === "needs_input") continue;
+        const at = (act.agentId === null ? undefined : slots.get(id)?.get(act.agentId)) ?? b.spot;
+        drawAction(ctx, theme, fallback, at, act.kind, act.failed, frameSince(act.startedAt));
+      }
+      for (const [id, watch] of compactions) {
+        const b = bound.get(id);
+        if (b !== undefined && watch.startedAt !== null) drawCompaction(ctx, theme, fallback, b.spot, frameSince(watch.startedAt));
       }
 
       particles = stepParticles(particles, dt);

@@ -1,4 +1,4 @@
-import type { CharState, Effort, Look, Tier } from "../../shared/types";
+import type { CharState, Effort, Look, Tier, ToolKind } from "../../shared/types";
 import { office } from "../themes/office";
 import { space } from "../themes/space";
 import { underwater } from "../themes/underwater";
@@ -24,6 +24,18 @@ export type Theme = {
   drawCharacter(ctx: Ctx, at: Point, look: Look, tier: Tier, state: CharState, effort: Effort, frame: number, facing: 1 | -1, moving: boolean): void;
   effects: { celebrate(at: Point, rng: () => number): Particle[]; levelUp(at: Point, rng: () => number): Particle[] };
   drawAmbient?(ctx: Ctx, t: number): void;
+  // Optional extras; the engine draws its own plain DEFAULTS (engine/extras.ts) for any a theme leaves out.
+  // `frame` counts animation frames since that thing started, as for drawCharacter.
+  /** A tool action by whoever stands at `spot` (the actor's work spot, or a sidekick's slot); `failed` for a failed tool. */
+  drawAction?(ctx: Ctx, spot: Point, kind: ToolKind, failed: boolean, frame: number): void;
+  /** One sidekick standing at `at`; `busy` while one of its own tools plays. */
+  drawSidekick?(ctx: Ctx, at: Point, frame: number, busy: boolean, t: number): void;
+  /** The context gauge at a work spot: fill step 0..3 (quarters), `hot` at or above the owner's warn threshold. */
+  drawContextGauge?(ctx: Ctx, spot: Point, step: 0 | 1 | 2 | 3, hot: boolean, t: number): void;
+  /** The short moment after a compaction, at the work spot. */
+  drawCompaction?(ctx: Ctx, spot: Point, frame: number): void;
+  /** Where idle characters meet to chat, inside `lounge`; without them, the lounge centre. */
+  socialSpots?: Point[];
 };
 
 export const THEMES: Theme[] = [office, space, underwater];

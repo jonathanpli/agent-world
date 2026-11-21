@@ -64,6 +64,13 @@ export function sessionsByRepo(state: ClientState): Map<string, Session[]> {
   return byRepo;
 }
 
+/** Each live session by the id of the actor it drives (its character id, or its key for a temp). */
+export function sessionsByActor(state: ClientState): Map<string, Session> {
+  const out = new Map<string, Session>();
+  for (const s of state.sessions.values()) out.set(s.characterId ?? s.key, s);
+  return out;
+}
+
 /** Where a session's actor works: its spot by rank in the repo, or a row along the place's bottom edge past six. */
 function sessionTargets(state: ClientState, layout: Layout): Map<string, Point> {
   const out = new Map<string, Point>();

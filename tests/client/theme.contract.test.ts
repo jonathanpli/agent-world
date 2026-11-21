@@ -1,8 +1,9 @@
 import { expect, test, vi } from "vitest";
+import { DEFAULTS, drawAction, drawCompaction, drawGauge, drawSidekicks } from "../../src/client/engine/extras";
 import { getTheme, safeDraw, THEMES, type Ctx, type Theme } from "../../src/client/engine/theme";
 import { randomLook } from "../../src/core/names";
 import { mulberry32 } from "../../src/shared/rng";
-import type { CharState, Effort, Tier } from "../../src/shared/types";
+import type { CharState, Effort, Tier, ToolKind } from "../../src/shared/types";
 import { mockCtx } from "../helpers/mockCtx";
 
 for (const theme of THEMES) test(`${theme.id} satisfies the contract`, () => {
@@ -69,5 +70,68 @@ test("safeDraw with a ctx brackets each attempt in save/restore, even when it th
   expect(depths).toEqual([1, 1]);       // the fallback starts from a clean save stack
   expect(saves).toBe(2);
   expect(depth).toBe(0);
+  errors.mockRestore();
+});
+
+const sks = (n: number): { id: string; since: number }[] => Array.from({ length: n }, (_, i) => ({ id: `sk${i}`, since: i * 10 }));
+const KINDS: ToolKind[] = ["edit", "shell", "read", "web", "delegate", "other"];
+const EXTRAS = ["drawAction", "drawSidekick", "drawContextGauge", "drawCompaction"] as const;
+
+/** Every extra the subject has, for every kind, failed value, gauge step and hot value, over a few frames. */
+function runExtras(subject: Partial<Pick<Theme, (typeof EXTRAS)[number]>>, ctx: Ctx): void {
+  const spot = { x: 60, y: 80 };
+  for (const frame of [0, 3, 19]) {
+    for (const kind of KINDS) for (const failed of [false, true]) subject.drawAction?.(ctx, spot, kind, failed, frame);
+    for (const busy of [false, true]) subject.drawSidekick?.(ctx, spot, frame, busy, frame / 8);
+    subject.drawCompaction?.(ctx, spot, frame);
+  }
+  for (const step of [0, 1, 2, 3] as const) for (const hot of [false, true]) for (const t of [0, 0.7, 1.3]) subject.drawContextGauge?.(ctx, spot, step, hot, t);
+}
+
+for (const theme of THEMES) test(`${theme.id}: every optional extra it has draws without throwing`, () => {
+  expect(() => runExtras(theme, mockCtx())).not.toThrow();
+  for (const p of theme.socialSpots ?? []) {
+    expect(p.x >= theme.lounge.x && p.x <= theme.lounge.x + theme.lounge.w && p.y >= theme.lounge.y && p.y <= theme.lounge.y + theme.lounge.h).toBe(true);
+  }
+});
+
+test("the engine defaults draw without throwing", () => {
+  expect(() => runExtras(DEFAULTS, mockCtx())).not.toThrow();
+  expect(() => drawSidekicks(mockCtx(), getTheme("office"), getTheme("office"), { x: 60, y: 80 }, sks(5), null, 9_000, 1)).not.toThrow();
+});
+
+/** Office without any of the extras: what every world looked like before them. */
+function bare(id: string): Theme {
+  const t = { ...getTheme("office"), id } as Theme;
+  for (const k of EXTRAS) delete t[k];
+  return t;
+}
+
+test("a theme with none of the extras draws through DEFAULTS", () => {
+  const plain = bare("plain");
+  const spies = EXTRAS.map(k => vi.spyOn(DEFAULTS, k));
+  const ctx = mockCtx();
+  drawAction(ctx, plain, plain, { x: 60, y: 80 }, "shell", true, 2);
+  drawGauge(ctx, plain, plain, { x: 60, y: 80 }, 2, true, 0.5);
+  drawCompaction(ctx, plain, plain, { x: 60, y: 80 }, 4);
+  drawSidekicks(ctx, plain, plain, { x: 60, y: 80 }, sks(4), "sk1", 1_000, 0.5);
+  const [action, sidekick, gauge, compaction] = spies;
+  expect(action).toHaveBeenCalledWith(ctx, { x: 60, y: 80 }, "shell", true, 2);
+  expect(gauge).toHaveBeenCalledWith(ctx, { x: 60, y: 80 }, 2, true, 0.5);
+  expect(compaction).toHaveBeenCalledWith(ctx, { x: 60, y: 80 }, 4);
+  expect(sidekick).toHaveBeenCalledTimes(3);               // three drawn, the fourth is "+1"
+  for (const s of spies) s.mockRestore();
+});
+
+test("a theme whose drawAction throws falls back to the defaults without throwing", () => {
+  const errors = vi.spyOn(console, "error").mockImplementation(() => {});
+  const bad = { ...bare("bad-action"), drawAction: () => { throw new Error("boom"); } } as Theme;
+  const fallback = bare("plain-fallback");
+  const spy = vi.spyOn(DEFAULTS, "drawAction");
+  const ctx = mockCtx();
+  expect(() => drawAction(ctx, bad, fallback, { x: 60, y: 80 }, "edit", false, 0)).not.toThrow();
+  expect(spy).toHaveBeenCalledTimes(1);
+  expect(errors).toHaveBeenCalledTimes(1);
+  spy.mockRestore();
   errors.mockRestore();
 });
