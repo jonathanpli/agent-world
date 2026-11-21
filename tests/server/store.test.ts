@@ -261,3 +261,27 @@ test("a malformed learnedLimits value loads as {} (or its valid entries) and a n
   expect(store.load().learnedLimits).toEqual({ n: 200_000 });
   db.close(); store.close();
 });
+
+test("a version-3 database opens, gives an empty recap, and records credits afterwards", () => {
+  const dir = mkdtempSync(join(tmpdir(), "aw-")); const path = join(dir, "w.db");
+  const db = new DatabaseSync(path);
+  for (const m of MIGRATIONS.slice(0, 3)) db.exec(m);
+  db.exec("PRAGMA user_version = 3");
+  db.exec(`INSERT INTO characters (id, name, tier, look, xp, created_at, last_active_at, retired, stats)
+    VALUES ('c1', 'Ada', 3, '{}', 10, 0, 0, 0, '{"tasks":1,"tools":2}')`);
+  db.exec(`INSERT INTO sessions (key, source, session_id, character_id, temp_look, repo_id, state, state_since, model, tier, effort,
+    started_at, last_event_at, task, last_summary, attention, activity) VALUES ('t:s1', 't', 's1', 'c1', NULL, 'r1', 'idle', 0, NULL, 3, NULL, 0, 0, NULL, NULL, 0, '[]')`);
+  db.close();
+  const store = openStore(path);
+  expect(store.load()).toMatchObject({ characters: [{ id: "c1" }], sessions: [{ key: "t:s1" }] });
+  const zero = { tasks: 0, tools: 0, failures: 0, xp: 0, levels: 0, compactions: 0, sidekicks: 0 };
+  expect(store.recap("2026-06-10", "2026-06-10")).toEqual(
+    { day: "2026-06-10", today: "2026-06-10", totals: zero, characters: [], repos: [], mvpCharacterId: null, streak: 0, prevDay: null, nextDay: null });
+  const at = new Date(2026, 5, 10, 12).getTime();
+  store.persist([{ type: "credit", at, characterId: "c1", repoId: "r1", ...zero, tasks: 1, xp: 7 }]);
+  const r = store.recap("2026-06-10", "2026-06-10");
+  expect(r.totals).toMatchObject({ tasks: 1, xp: 7 });
+  expect(r.characters).toMatchObject([{ characterId: "c1", name: "Ada", xp: 7 }]);
+  expect(r.streak).toBe(1);
+  store.close();
+});
