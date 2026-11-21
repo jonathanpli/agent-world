@@ -35,5 +35,14 @@ describe("claudeCode adapter", () => {
   test("PostModelSwitch", () => { expect(claudeCode.parse({ ...fx("PostModelSwitch.synthetic"), to_model: "claude-haiku-5-5" }, 0)[0]).toMatchObject({ kind: "model_change", model: "claude-haiku-5-5", tier: 1 }); });
   test("SessionEnd", () => { expect(claudeCode.parse(fx("SessionEnd"), 0)[0].kind).toBe("session_end"); });
   test("junk never throws", () => { for (const j of [null, 1, "x", [], {}, { hook_event_name: "Stop" }, { hook_event_name: "Nope", session_id: "s", cwd: "/" }]) expect(claudeCode.parse(j, 0)).toEqual([]); });
-  test("tierForModel", () => { expect(["claude-haiku-5-5","claude-sonnet-5-5","claude-opus-5-5","claude-fable-5-2","claude-mythos-5-2","gpt-x",undefined].map(tierForModel)).toEqual([1,2,3,4,4,undefined,undefined]); });
+  test("tierForModel: an unrecognised id is the default tier; missing, empty and placeholders stay unknown", () => {
+    expect(["claude-haiku-5-5","claude-sonnet-5-5","claude-opus-5-5","claude-fable-5-2","claude-mythos-5-2","gpt-x",undefined,"","<synthetic>"].map(tierForModel))
+      .toEqual([1,2,3,4,4,2,undefined,undefined,undefined]);
+  });
+  test("SessionStart with an unrecognised model binds at the default tier", () => { expect(claudeCode.parse({ ...fx("SessionStart"), model: "gpt-x" }, 0)[0]).toMatchObject({ model: "gpt-x", tier: 2 }); });
+  test("a Stop re-fired by a blocking Stop hook (stop_hook_active) produces no task_done", () => {
+    expect(fx("Stop.hookActive.synthetic").stop_hook_active).toBe(true);
+    expect(claudeCode.parse(fx("Stop.hookActive.synthetic"), 0)).toEqual([]);
+    expect(claudeCode.parse({ ...fx("Stop"), stop_hook_active: false }, 0)[0]!.kind).toBe("task_done");
+  });
 });

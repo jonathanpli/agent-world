@@ -6,10 +6,11 @@ const EFFORTS: readonly string[] = ["low", "medium", "high", "xhigh", "max"];
 const NEEDS_INPUT_TYPES: readonly string[] = ["permission_prompt", "idle_prompt", "elicitation_dialog", "agent_needs_input"];
 const TIER_MATCHERS: readonly (readonly [string, Tier])[] = [["haiku", 1], ["sonnet", 2], ["opus", 3], ["fable", 4], ["mythos", 4]];
 
+/** The tier for a model id; an id that matches none is the default tier. Missing, empty and placeholder ids such as "<synthetic>" are unknown. */
 export function tierForModel(model: string | undefined): Tier | undefined {
-  if (typeof model !== "string") return undefined;
+  if (typeof model !== "string" || model === "" || model.startsWith("<")) return undefined;
   const m = model.toLowerCase();
-  return TIER_MATCHERS.find(([needle]) => m.includes(needle))?.[1];
+  return TIER_MATCHERS.find(([needle]) => m.includes(needle))?.[1] ?? CONFIG.defaultTier;
 }
 
 const isRecord = (v: unknown): v is Record<string, unknown> => typeof v === "object" && v !== null && !Array.isArray(v);
@@ -56,6 +57,7 @@ function parse(raw: unknown, now: number): AgentEvent[] {
         return ev("needs_input", {}, { reason: str(raw.message) ?? "" });
       }
       case "Stop": {
+        if (raw.stop_hook_active === true) return [];    // re-fired after another Stop hook blocked it: not a new finish
         const last = str(raw.last_assistant_message);
         return ev("task_done", { ...(effort && { effort }) }, last !== undefined ? { summary: last.slice(0, CONFIG.textMax) } : {});
       }

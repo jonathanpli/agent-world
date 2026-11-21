@@ -407,3 +407,48 @@ test("prototype keys are unknown sources, not adapters", async () => {
   expect(error).not.toHaveBeenCalled();
   expect((await snapshot(base)).sessions).toHaveLength(0);
 });
+
+test("dismiss ends a session through the end path; unknown keys 404; foreign origins 403", async () => {
+  const { base, store } = await start({ readModel: async () => "claude-sonnet-4-5" });
+  const next = await openStream(base);
+  await next();                                         // snapshot
+  await ingest(base, fx("SessionStart"));
+  await next();
+  const path = `/api/sessions/${encodeURIComponent(SESSION_KEY)}/dismiss`;
+  expect((await raw(base, "POST", path, { origin: "https://evil.example" })).status).toBe(403);
+  expect((await snapshot(base)).sessions).toHaveLength(1);
+  expect((await send(base, "POST", "/api/sessions/claude-code%3Anope/dismiss")).status).toBe(404);
+  expect((await send(base, "POST", "/api/sessions/%E0%A4%A/dismiss")).status).toBe(400);
+  expect((await send(base, "POST", path)).status).toBe(204);
+  expect((await next()).data).toContainEqual({ type: "session_removed", key: SESSION_KEY });
+  const s = await snapshot(base);
+  expect(s.sessions).toHaveLength(0);
+  expect(s.characters).toHaveLength(1);                 // the character stays, off duty
+  expect(store.load().sessions).toHaveLength(0);        // persisted
+});
+
+test("starting in demo mode ends the sessions a previous demo run left in the store", async () => {
+  const { base, store } = await start({ readModel: async () => "claude-sonnet-4-5" });
+  await ingest(base, fx("SessionStart"));
+  await ingest(base, fx("UserPromptSubmit"));
+  expect(store.load().sessions).toHaveLength(1);
+  const demo = createApp({ store, demo: true, resolveRepo: async p => p, readModel: async () => null });
+  expect(store.load().sessions).toHaveLength(0);
+  expect(store.load().characters).toHaveLength(1);
+  const server = createServer(demo.handler);
+  await new Promise<void>(r => server.listen(0, "127.0.0.1", r));
+  try {
+    const s = await snapshot(`http://127.0.0.1:${(server.address() as AddressInfo).port}`);
+    expect(s.sessions).toEqual([]);
+  } finally {
+    demo.close(); server.closeAllConnections(); await new Promise(r => server.close(r));
+  }
+});
+
+test("an unrecognised model id binds at the default tier at once, keeping the model string", async () => {
+  const { base } = await start({ readModel: async () => "gpt-9-turbo" });
+  await ingest(base, fx("SessionStart"));
+  const s = (await snapshot(base)).sessions[0]!;
+  expect(s).toMatchObject({ tierKnown: true, tier: CONFIG.defaultTier, model: "gpt-9-turbo" });
+  expect(s.characterId).not.toBeNull();
+});
