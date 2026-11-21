@@ -1,5 +1,5 @@
 import { expect, test, vi } from "vitest";
-import { getTheme, safeDraw, THEMES, type Theme } from "../../src/client/engine/theme";
+import { getTheme, safeDraw, THEMES, type Ctx, type Theme } from "../../src/client/engine/theme";
 import { randomLook } from "../../src/core/names";
 import { mulberry32 } from "../../src/shared/rng";
 import type { CharState, Effort, Tier } from "../../src/shared/types";
@@ -56,5 +56,18 @@ test("safeDraw falls back when a theme throws", () => {
   expect(errors).toHaveBeenCalledTimes(1);                     // once per theme id
   safeDraw(fallback, fallback, fn);
   expect(seen.at(-1)).toBe("office");
+  errors.mockRestore();
+});
+
+test("safeDraw with a ctx brackets each attempt in save/restore, even when it throws", () => {
+  const errors = vi.spyOn(console, "error").mockImplementation(() => {});
+  let depth = 0, saves = 0;
+  const ctx = { save: () => { depth++; saves++; }, restore: () => { depth--; } } as unknown as Ctx;
+  const bad = { ...getTheme("office"), id: "bad-ctx" } as Theme;
+  const depths: number[] = [];
+  safeDraw(bad, getTheme("office"), t => { depths.push(depth); if (t.id === "bad-ctx") throw new Error("mid-draw"); }, ctx);
+  expect(depths).toEqual([1, 1]);       // the fallback starts from a clean save stack
+  expect(saves).toBe(2);
+  expect(depth).toBe(0);
   errors.mockRestore();
 });

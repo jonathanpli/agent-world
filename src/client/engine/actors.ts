@@ -2,7 +2,7 @@ import { CONFIG } from "../../shared/config";
 import type { Repo, Session } from "../../shared/types";
 import type { ClientState } from "../state";
 import { SPRITE } from "./sprite";
-import type { Place, Point, Rect, Theme } from "./theme";
+import { safeDraw, type Place, type Point, type Rect, type Theme } from "./theme";
 import { VIEW } from "./view";
 
 export type Actor = {
@@ -23,6 +23,21 @@ export function computeLayout(theme: Theme, repos: Repo[]): Layout {
     places.set(r.id, { screen, place: theme.placeFor(i % PER_SCREEN, count) });
   });
   return { screens: Math.max(1, Math.ceil(repos.length / PER_SCREEN)), places };
+}
+
+/**
+ * The layout from `theme`, or from `fallback` if the theme throws. `theme` is the one that produced it, so callers
+ * also read its lounge. If both throw, an empty one-screen layout with the fallback.
+ */
+export function safeLayout(theme: Theme, fallback: Theme, repos: Repo[]): { layout: Layout; theme: Theme } {
+  let out: { layout: Layout; theme: Theme } | null = null;
+  safeDraw(theme, fallback, t => {
+    const layout = computeLayout(t, repos);
+    const lounge = t.lounge;
+    if (typeof lounge?.x !== "number") throw new Error("theme has no lounge");
+    out = { layout, theme: t };
+  });
+  return out ?? { layout: { screens: 1, places: new Map() }, theme: fallback };
 }
 
 const inRect = (p: Point, r: Rect): boolean => p.x >= r.x && p.x <= r.x + r.w && p.y >= r.y && p.y <= r.y + r.h;

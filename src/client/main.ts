@@ -14,11 +14,17 @@ const demoBadge = $("demo");
 const engine = startEngine(canvas, state);
 
 for (const t of THEMES) themeSelect.add(new Option(t.name, t.id));
-themeSelect.addEventListener("change", () => {
-  api.putSettings({ theme: themeSelect.value }).catch(e => console.error("agent-world: could not save theme", e));
-});
-
 let appliedTheme: string | null = null;
+const showAppliedTheme = (): void => {
+  themeSelect.value = THEMES.some(t => t.id === appliedTheme) ? appliedTheme! : THEMES[0]!.id;
+};
+
+themeSelect.addEventListener("change", () => {
+  api.putSettings({ theme: themeSelect.value }).catch(e => {
+    console.error("agent-world: could not save theme", e);
+    showAppliedTheme();                  // put the select back to the theme actually in use
+  });
+});
 
 /** Brings the top-bar badges and theme in line with the state. */
 function syncChrome(): void {
@@ -27,7 +33,7 @@ function syncChrome(): void {
   if (state.settings.theme !== appliedTheme) {
     appliedTheme = state.settings.theme;
     engine.setTheme(appliedTheme);
-    themeSelect.value = THEMES.some(t => t.id === appliedTheme) ? appliedTheme : THEMES[0]!.id;
+    showAppliedTheme();
   }
 }
 

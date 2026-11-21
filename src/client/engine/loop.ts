@@ -2,8 +2,8 @@ import { levelForXp } from "../../core/levels";
 import { CONFIG } from "../../shared/config";
 import type { CharState, Effort, Look, Tier } from "../../shared/types";
 import { activeRepos, type ClientState } from "../state";
-import { actorAt, computeLayout, sessionsByRepo, stepActors, syncActors, type Actor, type Layout } from "./actors";
-import { drawBubble, drawEdgeButtons, drawPlate, drawSelection, edgeButtons, layoutPlates, type PlateText } from "./overlay";
+import { actorAt, safeLayout, sessionsByRepo, stepActors, syncActors, type Actor, type Layout } from "./actors";
+import { drawBubble, drawEdgeButtons, drawPlate, drawSelection, edgeButtons, layoutPlates, plateText } from "./overlay";
 import { drawParticles, stepParticles } from "./particles";
 import { getTheme, safeDraw, THEMES, VIEW, type Particle, type Point, type Rect, type Theme } from "./theme";
 
@@ -48,11 +48,12 @@ export function startEngine(canvas: HTMLCanvasElement, state: ClientState): Engi
   ctx.imageSmoothingEnabled = false;
 
   let theme: Theme = getTheme(state.settings.theme);
-  let layout: Layout = computeLayout(theme, []);
+  let layout: Layout = { screens: 1, places: new Map() };
   const actors = new Map<string, Actor>();
   const anim = new Map<string, { state: CharState; since: number; frame: number }>();
   let particles: Particle[] = [];
   let selected: string | null = null;
+  let hovered: string | null = null;
   const listeners: ((id: string | null) => void)[] = [];
   let screen = 0;
   let camX = 0;
@@ -79,9 +80,17 @@ export function startEngine(canvas: HTMLCanvasElement, state: ClientState): Engi
     for (const cb of listeners) cb(id);
   };
 
-  canvas.addEventListener("click", e => {
+  const toView = (e: MouseEvent): Point => {
     const r = canvas.getBoundingClientRect();
-    const p = { x: ((e.clientX - r.left) * VIEW.w) / r.width, y: ((e.clientY - r.top) * VIEW.h) / r.height };
+    return { x: ((e.clientX - r.left) * VIEW.w) / r.width, y: ((e.clientY - r.top) * VIEW.h) / r.height };
+  };
+  canvas.addEventListener("mousemove", e => {
+    const p = toView(e);
+    hovered = actorAt(actors, { x: p.x + camX, y: p.y });
+  });
+  canvas.addEventListener("mouseleave", () => { hovered = null; });
+  canvas.addEventListener("click", e => {
+    const p = toView(e);
     const buttons = edgeButtons(screen, layout.screens);
     if (layout.screens > 1 && inBox(p, buttons.left)) { page(screen - 1); return; }
     if (layout.screens > 1 && inBox(p, buttons.right)) { page(screen + 1); return; }
@@ -95,19 +104,31 @@ export function startEngine(canvas: HTMLCanvasElement, state: ClientState): Engi
     else if (e.key === "ArrowRight") page(screen + 1);
   });
 
-  const draw = (fn: (t: Theme) => void): void => safeDraw(theme, fallback, fn);
+  const draw = (fn: (t: Theme) => void): void => safeDraw(theme, fallback, fn, ctx);
+  let loopFailed = false;
 
   function frame(): void {
+    requestAnimationFrame(frame);           // scheduled first, so nothing below can stop the loop
+    try {
+      render();
+    } catch (e) {
+      if (!loopFailed) { loopFailed = true; console.error("agent-world: frame failed", e); }
+    }
+  }
+
+  function render(): void {
     const now = performance.now() / 1000;
     const dt = Math.min(0.1, now - last);
     last = now;
     const t = now;
     const wall = Date.now();
 
-    layout = computeLayout(theme, activeRepos(state));
+    const laid = safeLayout(theme, fallback, activeRepos(state));
+    layout = laid.layout;
+    const active = laid.theme;           // the theme whose layout and lounge are in use
     page(screen);
-    syncActors(actors, state, theme, layout, t, Math.random);
-    stepActors(actors, dt, theme.movement, t);
+    syncActors(actors, state, active, layout, t, Math.random);
+    stepActors(actors, dt, active.movement, t);
     const who = resolve(state);
     if (selected !== null && !actors.has(selected)) select(null);
 
@@ -129,55 +150,59 @@ export function startEngine(canvas: HTMLCanvasElement, state: ClientState): Engi
     ctx.globalAlpha = 1;
     ctx.clearRect(0, 0, VIEW.w, VIEW.h);
     ctx.save();
-    ctx.translate(-Math.round(camX), 0);
+    try {
+      ctx.translate(-Math.round(camX), 0);
 
-    const first = Math.floor(camX / VIEW.w), lastScreen = Math.ceil(camX / VIEW.w);
-    for (let s = first; s <= lastScreen; s++) {
-      ctx.save(); ctx.translate(s * VIEW.w, 0);
-      draw(th => th.drawBackdrop(ctx, t, s));
+      const first = Math.floor(camX / VIEW.w), lastScreen = Math.ceil(camX / VIEW.w);
+      for (let s = first; s <= lastScreen; s++) {
+        ctx.save(); ctx.translate(s * VIEW.w, 0);
+        draw(th => th.drawBackdrop(ctx, t, s));
+        ctx.restore();
+      }
+      draw(th => th.drawAmbient?.(ctx, t));
+
+      const ranked = sessionsByRepo(state);
+      for (const [repoId, { screen: s, place }] of layout.places) {
+        ctx.save(); ctx.translate(s * VIEW.w, 0);
+        draw(th => th.drawPlace(ctx, place, state.repos.get(repoId)?.name ?? "", t));
+        const list = ranked.get(repoId) ?? [];
+        place.spots.forEach((spot, i) => {
+          const occupant = list[i];
+          draw(th => th.drawWorkSpot(ctx, spot, occupant?.tier ?? null, occupant?.state ?? null, t));
+        });
+        ctx.restore();
+      }
+
+      const bob = active.movement === "walk" ? 0 : CONFIG.client.bobPx;
+      const drawn: { id: string; at: Point; w: Who }[] = [];
+      for (const a of [...actors.values()].sort((p, q) => p.pos.y - q.pos.y)) {
+        const w = who.get(a.id);
+        if (w === undefined) continue;
+        const phase = (a.id.length * 0.7) % (Math.PI * 2);
+        const at = { x: Math.round(a.pos.x), y: Math.round(a.pos.y + Math.sin(t * Math.PI * 2 * CONFIG.client.bobHz + phase) * bob) };
+        const f = Math.floor(anim.get(a.id)?.frame ?? 0);
+        draw(th => th.drawCharacter(ctx, at, w.look, w.tier, w.state, w.effort, f, a.facing, a.moving));
+        drawn.push({ id: a.id, at, w });
+      }
+
+      particles = stepParticles(particles, dt);
+      drawParticles(ctx, particles);
+
+      // compact plates for everyone; the hovered and selected actors get the full plate, drawn last so it sits on top
+      const title = (tier: Tier): string => active.tierTitles[tier] ?? fallback.tierTitles[tier];
+      const focus = (id: string): boolean => id === hovered || id === selected;
+      const full = drawn.filter(d => focus(d.id)).map(d => ({ at: d.at, text: plateText(d.w.name, d.w.level, title(d.w.tier), true) }));
+      const fullRects = layoutPlates(full);
+      const compact = drawn.filter(d => !focus(d.id)).map(d => ({ at: d.at, text: plateText(d.w.name, d.w.level, title(d.w.tier), false) }));
+      layoutPlates(compact, fullRects).forEach((r, i) => drawPlate(ctx, r, compact[i]!.text));
+      for (const d of drawn) if (d.w.attention) drawBubble(ctx, d.at, d.w.state === "needs_input" ? "alert" : "done", t);
+      const sel = drawn.find(d => d.id === selected);
+      if (sel !== undefined) drawSelection(ctx, sel.at, t, sel.w.attention ? 14 : 0);
+      fullRects.forEach((r, i) => drawPlate(ctx, r, full[i]!.text, true));
+    } finally {
       ctx.restore();
     }
-    draw(th => th.drawAmbient?.(ctx, t));
-
-    const ranked = sessionsByRepo(state);
-    for (const [repoId, { screen: s, place }] of layout.places) {
-      ctx.save(); ctx.translate(s * VIEW.w, 0);
-      draw(th => th.drawPlace(ctx, place, state.repos.get(repoId)?.name ?? "", t));
-      const list = ranked.get(repoId) ?? [];
-      place.spots.forEach((spot, i) => {
-        const occupant = list[i];
-        draw(th => th.drawWorkSpot(ctx, spot, occupant?.tier ?? null, occupant?.state ?? null, t));
-      });
-      ctx.restore();
-    }
-
-    const bob = theme.movement === "walk" ? 0 : CONFIG.client.bobPx;
-    const drawn: { id: string; at: Point; w: Who }[] = [];
-    for (const a of [...actors.values()].sort((p, q) => p.pos.y - q.pos.y)) {
-      const w = who.get(a.id);
-      if (w === undefined) continue;
-      const phase = (a.id.length * 0.7) % (Math.PI * 2);
-      const at = { x: Math.round(a.pos.x), y: Math.round(a.pos.y + Math.sin(t * Math.PI * 2 * CONFIG.client.bobHz + phase) * bob) };
-      const f = Math.floor(anim.get(a.id)?.frame ?? 0);
-      draw(th => th.drawCharacter(ctx, at, w.look, w.tier, w.state, w.effort, f, a.facing, a.moving));
-      drawn.push({ id: a.id, at, w });
-    }
-
-    particles = stepParticles(particles, dt);
-    drawParticles(ctx, particles);
-
-    const plates = drawn.map(d => ({
-      at: d.at,
-      text: { name: d.w.name, rest: ` · ${theme.tierTitles[d.w.tier]}${d.w.level === null ? "" : ` · Lv ${d.w.level}`}` } satisfies PlateText,
-    }));
-    layoutPlates(plates).forEach((r, i) => drawPlate(ctx, r, plates[i]!.text));
-    for (const d of drawn) if (d.w.attention) drawBubble(ctx, d.at, d.w.state === "needs_input" ? "alert" : "done", t);
-    const sel = drawn.find(d => d.id === selected);
-    if (sel !== undefined) drawSelection(ctx, sel.at, t, sel.w.attention ? 14 : 0);
-
-    ctx.restore();
     drawEdgeButtons(ctx, screen, layout.screens);
-    requestAnimationFrame(frame);
   }
   requestAnimationFrame(frame);
 

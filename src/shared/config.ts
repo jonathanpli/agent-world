@@ -52,7 +52,7 @@ export const CONFIG = {
     cheerS: 3,                                    // done: cheer this long, then lean
     overflowSpacing: 14,
     plateGap: 3,                                  // name plate: px below the feet
-    plateStack: 4,                                // plates nudged up at most this many times to avoid overlap
+    plateStack: 4,                                // plates try at most this many slots below and above to avoid overlap
     bubbleBouncePx: 2, bubbleBounceHz: 2,
     edgeButton: { w: 14, h: 28 },
     cameraLerp: 8,                                // per second
@@ -60,5 +60,5 @@ export const CONFIG = {
     particleFadeS: 0.5,
     catSpeed: 16,                                 // px/s, the office cat
   },
-  defaultSettings:{ theme: "office", notifyNeedsInput: true, notifyDone: true, sound: false, rosterCap: 12 },
+  defaultSettings: { theme: "office", notifyNeedsInput: true, notifyDone: true, sound: false, rosterCap: 12 },
 } as const;

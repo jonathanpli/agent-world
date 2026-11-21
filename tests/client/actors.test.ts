@@ -1,6 +1,6 @@
-import { expect, test } from "vitest";
-import { actorAt, computeLayout, stepActors, syncActors, type Actor } from "../../src/client/engine/actors";
-import { VIEW, type Rect } from "../../src/client/engine/theme";
+import { expect, test, vi } from "vitest";
+import { actorAt, computeLayout, safeLayout, stepActors, syncActors, type Actor } from "../../src/client/engine/actors";
+import { VIEW, type Rect, type Theme } from "../../src/client/engine/theme";
 import { applySnapshot, emptyState, type ClientState } from "../../src/client/state";
 import { office } from "../../src/client/themes/office";
 import { mulberry32 } from "../../src/shared/rng";
@@ -135,4 +135,32 @@ test("actorAt hits the sprite box", () => {
   expect(actorAt(actors, { x: 100, y: 101 })).toBeNull();
   actors.set("b", b);
   expect(actorAt(actors, { x: 102, y: 95 })).toBe("b");       // b is lower on screen, so drawn on top
+});
+
+test("safeLayout falls back when the theme's placeFor throws, and nothing escapes", () => {
+  const errors = vi.spyOn(console, "error").mockImplementation(() => {});
+  const broken: Theme = { ...office, id: "broken-layout", lounge: { x: -999, y: -999, w: 1, h: 1 }, placeFor: () => { throw new Error("boom"); } };
+  const rs = repos(8);
+  let result: ReturnType<typeof safeLayout> | undefined;
+  expect(() => { result = safeLayout(broken, office, rs); }).not.toThrow();
+  expect(result!.theme).toBe(office);
+  expect(result!.layout).toEqual(computeLayout(office, rs));
+  expect(errors).toHaveBeenCalledTimes(1);
+  // off-duty actors use the fallback's lounge, not the broken theme's
+  const s = stateWith([], [char("free")]);
+  const actors = new Map<string, Actor>();
+  syncActors(actors, s, result!.theme, result!.layout, 0, mulberry32(1));
+  expect(inside(actors.get("free")!.target, office.lounge)).toBe(true);
+  // the working theme is used as is
+  expect(safeLayout(office, office, rs).theme).toBe(office);
+  errors.mockRestore();
+});
+
+test("safeLayout survives both themes throwing with an empty one-screen layout", () => {
+  const errors = vi.spyOn(console, "error").mockImplementation(() => {});
+  const broken: Theme = { ...office, id: "broken-both", placeFor: () => { throw new Error("boom"); } };
+  const r = safeLayout(broken, broken, repos(3));
+  expect(r.layout.screens).toBe(1);
+  expect(r.layout.places.size).toBe(0);
+  errors.mockRestore();
 });

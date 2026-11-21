@@ -10,20 +10,44 @@ const UI = {
   bubble: "#fffaf0", alert: "#e8443a", ok: "#2fa85a", ring: "#ffe14d", ringD: "#c99a1e", button: "#21182a", arrow: "#fffaf0",
 } as const;
 
-export type PlateText = { name: string; rest: string };   // "Ada" and " · Senior · Lv 1"
+export type PlateText = { name: string; rest: string };   // "Ada" plus " 3" (compact) or " · Senior · Lv 3" (full)
 const PLATE_H = FONT.h + 2;
 
-/** Lays name plates out under each actor's feet, nudging later ones down so none overlap. */
-export function layoutPlates(items: { at: Point; text: PlateText }[]): Rect[] {
-  const placed: Rect[] = [];
+/**
+ * Plate text. Compact plates carry the name and level ("Ada 3"); the full one ("Ada · Senior · Lv 3") is for the
+ * hovered or selected actor. Temps have no level, so their compact plate is just "Temp".
+ */
+export function plateText(name: string, level: number | null, tierTitle: string, full: boolean): PlateText {
+  if (full) return { name, rest: ` · ${tierTitle}${level === null ? "" : ` · Lv ${level}`}` };
+  return { name, rest: level === null ? "" : ` ${level}` };
+}
+
+/**
+ * Lays plates out under each actor's feet, clamped inside the actor's screen on every side. A plate that would
+ * overlap one already placed tries the slots below, then above (up to CONFIG.client.plateStack steps each way),
+ * skipping slots outside the view; if none is free it keeps its clamped home slot. `obstacles` (plates already
+ * placed, such as the hovered actor's full plate) are avoided the same way.
+ */
+export function layoutPlates(items: { at: Point; text: PlateText }[], obstacles: Rect[] = []): Rect[] {
+  const placed: Rect[] = [...obstacles];
   const order = items.map((it, i) => ({ it, i })).sort((a, b) => a.it.at.y - b.it.at.y || a.it.at.x - b.it.at.x);
   const out = new Array<Rect>(items.length);
+  const maxY = VIEW.h - PLATE_H;
   for (const { it, i } of order) {
     const w = textWidth(it.text.name + it.text.rest) + 4;
-    const left = Math.floor(it.at.x / VIEW.w) * VIEW.w;          // keep the plate on the actor's screen
-    const x = Math.max(left + 1, Math.min(left + VIEW.w - w - 1, Math.round(it.at.x - w / 2)));
-    const r: Rect = { x, y: Math.round(it.at.y + CONFIG.client.plateGap), w, h: PLATE_H };
-    for (let n = 0; n < CONFIG.client.plateStack && placed.some(p => overlaps(p, r)); n++) r.y += PLATE_H + 1;
+    const left = Math.floor(it.at.x / VIEW.w) * VIEW.w;          // the actor's screen
+    const x = Math.max(left, Math.min(left + VIEW.w - w, Math.round(it.at.x - w / 2)));
+    const home = Math.max(0, Math.min(maxY, Math.round(it.at.y + CONFIG.client.plateGap)));
+    let r: Rect = { x, y: home, w, h: PLATE_H };
+    if (placed.some(p => overlaps(p, r))) {
+      for (let n = 1; n <= CONFIG.client.plateStack; n++) {
+        const free = [home + n * (PLATE_H + 1), home - n * (PLATE_H + 1)]
+          .filter(y => y >= 0 && y <= maxY)
+          .map(y => ({ x, y, w, h: PLATE_H }))
+          .find(c => !placed.some(p => overlaps(p, c)));
+        if (free !== undefined) { r = free; break; }
+      }
+    }
     placed.push(r);
     out[i] = r;
   }
@@ -32,8 +56,9 @@ export function layoutPlates(items: { at: Point; text: PlateText }[]): Rect[] {
 
 const overlaps = (a: Rect, b: Rect): boolean => a.x < b.x + b.w && b.x < a.x + a.w && a.y < b.y + b.h && b.y < a.y + a.h;
 
-export function drawPlate(ctx: Ctx, r: Rect, text: PlateText): void {
-  ctx.globalAlpha = 0.78;
+/** `solid` plates (the hovered or selected actor's, drawn over the others) hide whatever is beneath them. */
+export function drawPlate(ctx: Ctx, r: Rect, text: PlateText, solid = false): void {
+  ctx.globalAlpha = solid ? 1 : 0.78;
   rect(ctx, r.x + 1, r.y, r.w - 2, r.h, UI.plate);
   rect(ctx, r.x, r.y + 1, r.w, r.h - 2, UI.plate);
   ctx.globalAlpha = 1;

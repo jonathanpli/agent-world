@@ -32,16 +32,24 @@ export function getTheme(id: string): Theme {
 
 const reported = new Set<string>();
 
-/** Runs fn(theme); if it throws, logs once per theme id and runs fn(fallback) instead. Never throws. */
-export function safeDraw(theme: Theme, fallback: Theme, fn: (t: Theme) => void): void {
+function attempt(t: Theme, fn: (t: Theme) => void, ctx: Ctx | undefined): boolean {
+  ctx?.save();
   try {
-    fn(theme);
-    return;
+    fn(t);
+    return true;
   } catch (e) {
-    if (!reported.has(theme.id)) { reported.add(theme.id); console.error(`agent-world: theme "${theme.id}" failed to draw`, e); }
+    if (!reported.has(t.id)) { reported.add(t.id); console.error(`agent-world: theme "${t.id}" failed to draw`, e); }
+    return false;
+  } finally {
+    ctx?.restore();
   }
-  if (fallback === theme) return;
-  try { fn(fallback); } catch (e) {
-    if (!reported.has(fallback.id)) { reported.add(fallback.id); console.error(`agent-world: theme "${fallback.id}" failed to draw`, e); }
-  }
+}
+
+/**
+ * Runs fn(theme); if it throws, logs once per theme id and runs fn(fallback) instead. Never throws.
+ * With `ctx`, each attempt runs between save() and restore(), so a throw mid-draw cannot leak canvas state.
+ */
+export function safeDraw(theme: Theme, fallback: Theme, fn: (t: Theme) => void, ctx?: Ctx): void {
+  if (attempt(theme, fn, ctx) || fallback === theme) return;
+  attempt(fallback, fn, ctx);
 }
