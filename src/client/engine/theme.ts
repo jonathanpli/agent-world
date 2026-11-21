@@ -26,7 +26,7 @@ export type Theme = {
   drawAmbient?(ctx: Ctx, t: number): void;
   // Optional extras; the engine draws its own plain DEFAULTS (engine/extras.ts) for any a theme leaves out.
   // `frame` counts animation frames since that thing started, as for drawCharacter.
-  /** A tool action by whoever stands at `spot` (the actor's work spot, or a sidekick's slot); `failed` for a failed tool. */
+  /** The main agent's tool action at its work spot (a sidekick's own tool only makes it busy); `failed` for a failed tool. */
   drawAction?(ctx: Ctx, spot: Point, kind: ToolKind, failed: boolean, frame: number): void;
   /** One sidekick standing at `at`; `busy` while one of its own tools plays. */
   drawSidekick?(ctx: Ctx, at: Point, frame: number, busy: boolean, t: number): void;

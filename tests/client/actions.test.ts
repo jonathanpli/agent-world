@@ -1,7 +1,8 @@
 import { describe, expect, test } from "vitest";
-import { ACTION_MS, COMPACTION_MS, gaugeStep, nextAction, nextCompaction, sidekickSlots } from "../../src/client/engine/actions";
+import { ACTION_MS, COMPACTION_MS, extrasFor, gaugeStep, nextAction, nextCompaction, sidekickSlots, type ActiveAction } from "../../src/client/engine/actions";
 import { VIEW } from "../../src/client/engine/view";
-import type { ContextInfo, LastTool } from "../../src/shared/types";
+import type { ContextInfo, LastTool, Sidekick } from "../../src/shared/types";
+import { session } from "../helpers/clientFixtures";
 
 const tool = (at: number, over: Partial<LastTool> = {}): LastTool => ({ kind: "edit", at, failed: false, agentId: null, ...over });
 
@@ -102,5 +103,43 @@ describe("nextCompaction", () => {
   });
   test("a decrease (a new session) resets the baseline without a moment", () => {
     expect(nextCompaction({ count: 4, startedAt: null }, 0, 1_000)).toEqual({ count: 0, startedAt: null });
+  });
+});
+
+describe("extrasFor", () => {
+  const kick = (id: string): Sidekick => ({ id, type: "Explore", since: 0, lastAt: 0 });
+  const act = (agentId: string | null): ActiveAction => ({ kind: "edit", failed: false, agentId, startedAt: 1_000 });
+  const info: ContextInfo = { tokens: 50_000, peak: 50_000, limit: 200_000, estimated: true, compactions: 1, warned: false, seen: [] };
+  const busy = session("k", "c", "r", { context: info, sidekicks: ["s1", "s2", "s3", "s4"].map(kick) });
+
+  test("before the actor has arrived at its work spot, nothing is drawn", () => {
+    expect(extrasFor(busy, false, act(null), true)).toEqual({ gauge: false, sidekicks: false, busySidekick: null, action: null, compaction: false });
+  });
+
+  test("arrived: gauge, sidekicks, the main agent's action at the spot and the compaction moment", () => {
+    const a = act(null);
+    expect(extrasFor(busy, true, a, true)).toEqual({ gauge: true, sidekicks: true, busySidekick: null, action: a, compaction: true });
+  });
+
+  test("no context reading, no sidekicks, no action: only what exists is drawn", () => {
+    expect(extrasFor(session("k", "c", "r"), true, null, false)).toEqual({ gauge: false, sidekicks: false, busySidekick: null, action: null, compaction: false });
+  });
+
+  test("an action owned by a drawn sidekick makes that sidekick busy and draws no action", () => {
+    expect(extrasFor(busy, true, act("s2"), false)).toMatchObject({ sidekicks: true, busySidekick: "s2", action: null });
+  });
+
+  test("an action whose agent id is not a drawn sidekick plays at the work spot", () => {
+    for (const id of ["s4", "gone"]) {
+      const a = act(id);                                  // s4 is past the three shown, under "+1"; "gone" is unknown
+      expect(extrasFor(busy, true, a, false)).toMatchObject({ busySidekick: null, action: a });
+    }
+  });
+
+  test("needs_input suppresses the action and any busy sidekick, but not the gauge or sidekicks", () => {
+    const waiting = { ...busy, state: "needs_input" as const };
+    for (const id of [null, "s1"]) {
+      expect(extrasFor(waiting, true, act(id), false)).toEqual({ gauge: true, sidekicks: true, busySidekick: null, action: null, compaction: false });
+    }
   });
 });

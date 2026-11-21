@@ -1,4 +1,4 @@
-import type { ContextInfo, LastTool, ToolKind } from "../../shared/types";
+import type { ContextInfo, LastTool, Session, ToolKind } from "../../shared/types";
 import type { Point } from "./theme";
 import { VIEW } from "./view";
 
@@ -60,4 +60,26 @@ export function nextCompaction(prev: CompactionWatch | undefined, count: number,
   if (prev === undefined || count < prev.count) return { count, startedAt: null };
   if (count > prev.count) return { count, startedAt: now };
   return prev.startedAt !== null && now - prev.startedAt >= COMPACTION_MS ? { count, startedAt: null } : prev;
+}
+
+/** What to draw at a session-bound actor's work spot this frame. `action` is the one to draw at the spot, if any. */
+export type Extras = { gauge: boolean; sidekicks: boolean; busySidekick: string | null; action: ActiveAction | null; compaction: boolean };
+
+/**
+ * Nothing until the actor has arrived at its work spot. Then the gauge (once there is a reading), the sidekicks, and
+ * the compaction moment while `compacting`. An action owned by a drawn sidekick (one of the first SIDEKICKS_SHOWN)
+ * only makes that sidekick busy; any other action plays at the spot. No action, and no busy sidekick, while it needs you.
+ */
+export function extrasFor(session: Session, arrived: boolean, action: ActiveAction | null, compacting: boolean): Extras {
+  if (!arrived) return { gauge: false, sidekicks: false, busySidekick: null, action: null, compaction: false };
+  const live = session.state === "needs_input" ? null : action;
+  const drawn = session.sidekicks.slice(0, SIDEKICKS_SHOWN);
+  const owner = live?.agentId == null ? undefined : drawn.find(k => k.id === live.agentId);
+  return {
+    gauge: session.context !== null,
+    sidekicks: session.sidekicks.length > 0,
+    busySidekick: owner?.id ?? null,
+    action: owner === undefined ? live : null,
+    compaction: compacting,
+  };
 }
