@@ -1,5 +1,5 @@
 import { defineConfig } from "vitest/config";
-import { CONFIG } from "./src/shared/config";
+import { CONFIG } from "./src/shared/config.ts";
 
 export default defineConfig(({ mode }) => {
   const port = process.env.AGENT_WORLD_PORT ?? (mode === "demo" ? CONFIG.demoPort : CONFIG.port);

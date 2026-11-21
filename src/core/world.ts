@@ -2,6 +2,7 @@ import { CONFIG } from "../shared/config";
 import { isValidLook } from "../shared/cosmetics";
 import type { AgentEvent, Character, Delta, Look, Notice, Repo, Session, Settings, Snapshot, Tier } from "../shared/types";
 import { pickCharacter } from "./assign";
+import { earned, ACHIEVEMENTS } from "./achievements";
 import { levelForXp } from "./levels";
 import { randomLook, randomName } from "./names";
 
@@ -26,6 +27,8 @@ export function createWorld(init: WorldInit, deps: WorldDeps): World {
   let settings: Settings = clone(init.settings);
   /** `${sessionKey}|${noticeKind}` → time of the last notice emitted. Private, never in snapshots. */
   const lastNoticeAt = new Map<string, number>();
+  /** sessionKey → current tool-XP minute window. Private, never in snapshots. */
+  const toolWindow = new Map<string, { start: number; earned: number }>();
 
   const characterDelta = (c: Character): Delta => ({ type: "character", character: clone(c) });
   const sessionDelta = (s: Session): Delta => ({ type: "session", session: clone(s) });
@@ -102,12 +105,42 @@ export function createWorld(init: WorldInit, deps: WorldDeps): World {
     sessions.delete(key);
     lastNoticeAt.delete(`${key}|needs_input`);
     lastNoticeAt.delete(`${key}|done`);
+    toolWindow.delete(key);
     return { type: "session_removed", key };
   }
 
-  /** XP hook: Task 3 fills this in. */
-  function award(_session: Session, _ev: AgentEvent): Delta[] {
-    return [];
+  /** Grants XP, level-ups and achievements to the session's character. Returns notices only; apply emits the character delta. */
+  function award(session: Session, ev: AgentEvent): Delta[] {
+    const c = session.characterId === null ? undefined : characters.get(session.characterId);
+    if (c === undefined) return [];
+    let gain = 0;
+    if (ev.kind === "tool") {
+      c.stats.tools++;
+      let w = toolWindow.get(session.key);
+      if (w === undefined || ev.at - w.start >= CONFIG.toolWindowMs) { w = { start: ev.at, earned: 0 }; toolWindow.set(session.key, w); }
+      gain = Math.min(CONFIG.xp.tool, CONFIG.xp.toolCapPerMinute - w.earned);
+      w.earned += gain;
+    } else if (ev.kind === "prompt") gain = CONFIG.xp.prompt;
+    else if (ev.kind === "task_done") { gain = CONFIG.xp.taskDone; c.stats.tasks++; }
+    else return [];
+
+    const levelBefore = levelForXp(c.xp);
+    c.xp += gain;
+    c.repoXp[session.repoId] = (c.repoXp[session.repoId] ?? 0) + gain;
+    c.lastActiveAt = ev.at;
+
+    const repoName = repos.get(session.repoId)?.name ?? null;
+    const out: Delta[] = [];
+    const push = (kind: "level_up" | "achievement", text: string): void => {
+      out.push({ type: "notice", notice: { id: deps.newId(), at: ev.at, kind, sessionKey: session.key, characterId: c.id, characterName: c.name, repoName, text } });
+    };
+    const levelAfter = levelForXp(c.xp);
+    if (levelAfter > levelBefore) push("level_up", `${c.name} reached level ${levelAfter}`);
+    for (const id of earned(c, { at: ev.at, session, levelBefore, finishedTask: ev.kind === "task_done" })) {
+      c.achievements[id] = ev.at;
+      push("achievement", `${c.name} earned ${ACHIEVEMENTS.find(a => a.id === id)!.title}`);
+    }
+    return out;
   }
 
   function apply(ev: AgentEvent): Delta[] {

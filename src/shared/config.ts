@@ -1,5 +1,10 @@
 export const CONFIG = {
   xp: { tool: 2, prompt: 5, taskDone: 25, toolCapPerMinute: 60 },
+  toolWindowMs: 60_000,
+  achievements: {
+    tasksMany: 100, toolsMany: 1000, reposNeeded: 5, levelHigh: 10, levelTop: 25, legendRepoXp: 6000,
+    nightHours: [0, 4], earlyHours: [5, 6], marathonMs: 14_400_000,
+  },
   levelBase: 50,
   levelExponent: 1.6,
   repoRanks: [["Newcomer", 0], ["Regular", 100], ["Veteran", 500], ["Expert", 2000], ["Legend", 6000]],

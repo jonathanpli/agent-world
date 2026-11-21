@@ -93,7 +93,7 @@ test("activity keeps the last 20 lines", () => {
 });
 
 test("notices are throttled per session and kind", () => {
-  const w = newWorld(); const n = (d: Delta[]) => d.filter(x => x.type === "notice").length;
+  const w = newWorld(); const n = (d: Delta[]) => d.filter(x => x.type === "notice" && (x.notice.kind === "needs_input" || x.notice.kind === "done")).length;   // ignore xp-driven level_up/achievement notices
   expect(n(w.apply(ev("needs_input", { at: 0 })))).toBe(1);
   expect(n(w.apply(ev("needs_input", { at: 9_999 })))).toBe(0);
   expect(n(w.apply(ev("task_done", { at: 9_999 })))).toBe(1);     // different kind
