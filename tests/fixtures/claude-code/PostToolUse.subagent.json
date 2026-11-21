@@ -1,0 +1,27 @@
+{
+  "session_id": "11111111-2222-4333-8444-555555555555",
+  "transcript_path": "/Users/test/.claude/projects/-Users-test-repo/11111111-2222-4333-8444-555555555555.jsonl",
+  "cwd": "/Users/test/repo",
+  "prompt_id": "22222222-3333-4444-8555-666666666666",
+  "permission_mode": "auto",
+  "agent_id": "a5b204f6cefc0d539",
+  "agent_type": "general-purpose",
+  "effort": {
+    "level": "medium"
+  },
+  "hook_event_name": "PostToolUse",
+  "tool_name": "Bash",
+  "tool_input": {
+    "command": "echo hi",
+    "description": "Print hi via echo"
+  },
+  "tool_response": {
+    "stdout": "hi",
+    "stderr": "",
+    "interrupted": false,
+    "isImage": false,
+    "noOutputExpected": false
+  },
+  "tool_use_id": "toolu_01FnVkpEhyayNdFicP54VCtV",
+  "duration_ms": 621
+}

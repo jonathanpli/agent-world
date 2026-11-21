@@ -1,0 +1,92 @@
+{
+  "session_id": "11111111-2222-4333-8444-555555555555",
+  "transcript_path": "/Users/test/.claude/projects/-Users-test-repo/11111111-2222-4333-8444-555555555555.jsonl",
+  "cwd": "/Users/test/repo",
+  "prompt_id": "22222222-3333-4444-8555-666666666666",
+  "permission_mode": "auto",
+  "effort": {
+    "level": "medium"
+  },
+  "hook_event_name": "PostToolUse",
+  "tool_name": "Agent",
+  "tool_input": {
+    "description": "Run echo hi",
+    "prompt": "Run the Bash command `echo hi` and report its output. Do nothing else.",
+    "subagent_type": "general-purpose",
+    "run_in_background": false
+  },
+  "tool_response": {
+    "status": "completed",
+    "prompt": "Run the Bash command `echo hi` and report its output. Do nothing else.",
+    "agentId": "a5b204f6cefc0d539",
+    "agentType": "general-purpose",
+    "handback": "send",
+    "handbackReport": {
+      "text": "Ran `echo hi` via Bash. Output: `hi`",
+      "toolUseId": "toolu_01DDMu2Mf1uQnNdPisXK1LXp"
+    },
+    "toolsUsed": [
+      "Bash",
+      "SubagentHandback"
+    ],
+    "harnessNoteCount": 1,
+    "harnessTailCount": 0,
+    "harnessSectionHash": "535a4a597c1b620f",
+    "content": [
+      {
+        "type": "text",
+        "text": "This agent's report was delivered to you as a message from \"a5b204f6cefc0d539\" (its SubagentHandback call). Read it there; it is not repeated here.\n"
+      }
+    ],
+    "resolvedModel": "claude-haiku-5-5",
+    "totalDurationMs": 5554,
+    "totalTokens": 35095,
+    "totalToolUseCount": 1,
+    "usage": {
+      "output_tokens_details": {
+        "thinking_tokens": 73
+      },
+      "input_tokens": 2,
+      "cache_creation_input_tokens": 4890,
+      "cache_read_input_tokens": 30058,
+      "output_tokens": 145,
+      "server_tool_use": {
+        "web_search_requests": 0,
+        "web_fetch_requests": 0
+      },
+      "service_tier": "standard",
+      "cache_creation": {
+        "ephemeral_1h_input_tokens": 0,
+        "ephemeral_5m_input_tokens": 4890
+      },
+      "inference_geo": "global",
+      "iterations": [
+        {
+          "input_tokens": 2,
+          "output_tokens": 145,
+          "cache_read_input_tokens": 30058,
+          "cache_creation_input_tokens": 4890,
+          "cache_creation": {
+            "ephemeral_5m_input_tokens": 4890,
+            "ephemeral_1h_input_tokens": 0
+          },
+          "type": "message"
+        }
+      ],
+      "speed": "standard",
+      "fallback_credit": null
+    },
+    "toolStats": {
+      "readCount": 0,
+      "searchCount": 0,
+      "bashCount": 1,
+      "editFileCount": 0,
+      "linesAdded": 0,
+      "linesRemoved": 0,
+      "otherToolCount": 0
+    },
+    "canContinueAgent": true
+  },
+  "tool_use_id": "toolu_01NtuAggn1o8jCgzeSWzmfD2",
+  "duration_ms": 5556
+}

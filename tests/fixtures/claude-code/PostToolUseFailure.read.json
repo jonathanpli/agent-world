@@ -1,0 +1,19 @@
+{
+  "session_id": "11111111-2222-4333-8444-555555555555",
+  "transcript_path": "/Users/test/.claude/projects/-Users-test-repo/11111111-2222-4333-8444-555555555555.jsonl",
+  "cwd": "/Users/test/repo",
+  "prompt_id": "22222222-3333-4444-8555-666666666666",
+  "permission_mode": "auto",
+  "effort": {
+    "level": "medium"
+  },
+  "hook_event_name": "PostToolUseFailure",
+  "tool_name": "Read",
+  "tool_input": {
+    "file_path": "/nonexistent-file-xyz.txt"
+  },
+  "tool_use_id": "toolu_015gRSgf3wE58CV5u673JP18",
+  "error": "File does not exist. Note: your current working directory is /Users/test/repo",
+  "is_interrupt": false,
+  "duration_ms": 5
+}

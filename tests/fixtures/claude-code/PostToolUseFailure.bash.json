@@ -1,0 +1,20 @@
+{
+  "session_id": "11111111-2222-4333-8444-555555555555",
+  "transcript_path": "/Users/test/.claude/projects/-Users-test-repo/11111111-2222-4333-8444-555555555555.jsonl",
+  "cwd": "/Users/test/repo",
+  "prompt_id": "22222222-3333-4444-8555-666666666666",
+  "permission_mode": "auto",
+  "effort": {
+    "level": "medium"
+  },
+  "hook_event_name": "PostToolUseFailure",
+  "tool_name": "Bash",
+  "tool_input": {
+    "command": "rtk ls /nonexistent-dir-xyz",
+    "description": "List nonexistent directory to check error output"
+  },
+  "tool_use_id": "toolu_018pggFc3F3wEuSzSssp1HqU",
+  "error": "Exit code 1\nls: /nonexistent-dir-xyz: No such file or directory",
+  "is_interrupt": false,
+  "duration_ms": 42
+}
