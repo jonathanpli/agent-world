@@ -41,5 +41,24 @@ export const CONFIG = {
     endChance: 0.1, respawnMaxMs: 10_000, endDelayMs: [1_000, 3_000],
     modelChangeChance: 0.05,
   },
-  defaultSettings: { theme: "office", notifyNeedsInput: true, notifyDone: true, sound: false, rosterCap: 12 },
+  client: {
+    noticeMax: 50,
+    reconnectMs: 2_000,
+    speed: { walk: 40, float: 25, swim: 30 },     // px/s
+    bobPx: 2, bobHz: 0.6,                         // float/swim sine bob, drawing only
+    arrivePx: 1,
+    wanderS: [4, 10],                             // seconds between lounge wander targets
+    animFps: 8,
+    cheerS: 3,                                    // done: cheer this long, then lean
+    overflowSpacing: 14,
+    plateGap: 3,                                  // name plate: px below the feet
+    plateStack: 4,                                // plates nudged up at most this many times to avoid overlap
+    bubbleBouncePx: 2, bubbleBounceHz: 2,
+    edgeButton: { w: 14, h: 28 },
+    cameraLerp: 8,                                // per second
+    gravity: 140,                                 // px/s² on particles
+    particleFadeS: 0.5,
+    catSpeed: 16,                                 // px/s, the office cat
+  },
+  defaultSettings:{ theme: "office", notifyNeedsInput: true, notifyDone: true, sound: false, rosterCap: 12 },
 } as const;

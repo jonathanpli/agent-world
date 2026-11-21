@@ -1,0 +1,27 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Agent World</title>
+  <link rel="stylesheet" href="./styles.css">
+</head>
+<body>
+  <header id="topbar">
+    <h1>Agent World</h1>
+    <span id="demo" class="badge demo" hidden>DEMO</span>
+    <label class="theme-pick">Theme <select id="theme" aria-label="Theme"></select></label>
+    <span id="attention" class="attention" aria-live="polite"></span>
+    <span id="reconnecting" class="badge warn">Reconnecting…</span>
+    <button id="open-settings" type="button" title="Settings" aria-label="Settings">⚙</button>
+  </header>
+  <main id="layout">
+    <div id="stage"><canvas id="world" width="480" height="270"></canvas></div>
+    <aside id="roster" aria-label="Roster"></aside>
+    <aside id="inspector" aria-label="Inspector" hidden></aside>
+  </main>
+  <footer id="ticker" aria-live="polite"></footer>
+  <dialog id="settings"></dialog>
+  <script type="module" src="./main.ts"></script>
+</body>
+</html>

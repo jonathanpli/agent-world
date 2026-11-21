@@ -1,0 +1,113 @@
+:root {
+  --bg: #1b1520;
+  --panel: #251d2b;
+  --line: #3a2f42;
+  --text: #f4ead8;
+  --dim: #b5a8c2;
+  --accent: #ffcf5a;
+  --warn: #ff8c5a;
+  color-scheme: dark;
+}
+
+* { box-sizing: border-box; }
+
+html, body {
+  height: 100%;
+  margin: 0;
+  background: var(--bg);
+  color: var(--text);
+  font: 14px/1.4 system-ui, -apple-system, "Segoe UI", sans-serif;
+}
+
+body {
+  display: grid;
+  grid-template-rows: auto 1fr auto;
+  height: 100vh;
+}
+
+#topbar {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  padding: 8px 16px;
+  background: var(--panel);
+  border-bottom: 1px solid var(--line);
+}
+
+#topbar h1 {
+  margin: 0;
+  font-size: 16px;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+}
+
+.theme-pick { color: var(--dim); display: flex; align-items: center; gap: 6px; }
+
+select, button {
+  font: inherit;
+  color: var(--text);
+  background: var(--bg);
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  padding: 3px 8px;
+}
+
+button { cursor: pointer; }
+#open-settings { margin-left: auto; font-size: 16px; line-height: 1; padding: 4px 8px; }
+
+.attention:empty { display: none; }
+
+.badge {
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  padding: 2px 7px;
+  border-radius: 4px;
+}
+.badge.demo { background: var(--accent); color: #2a1d10; }
+.badge.warn { background: var(--warn); color: #2a1208; }
+[hidden] { display: none !important; }
+
+#layout {
+  display: grid;
+  grid-template-columns: 1fr auto auto;
+  min-height: 0;
+}
+
+#stage {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+  padding: 12px;
+}
+
+#world {
+  display: block;
+  image-rendering: pixelated;
+  border-radius: 4px;
+  box-shadow: 0 6px 30px rgb(0 0 0 / 45%);
+  cursor: pointer;
+}
+
+#roster, #inspector {
+  width: 240px;
+  background: var(--panel);
+  border-left: 1px solid var(--line);
+  overflow: auto;
+}
+
+#roster:empty { display: none; }
+
+#ticker {
+  min-height: 30px;
+  padding: 6px 16px;
+  color: var(--dim);
+  background: var(--panel);
+  border-top: 1px solid var(--line);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
