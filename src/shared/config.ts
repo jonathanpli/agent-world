@@ -27,6 +27,7 @@ export const CONFIG = {
   gitTimeoutMs: 1_000,
   repoResolveTimeoutMs: 2_500,
   modelReadTimeoutMs: 1_000,
+  hookTimeoutSeconds: 5,
   sseKeepAliveMs: 20_000,
   pruneIntervalMs: 3_600_000,
   cosmeticEveryLevels: 5,
