@@ -2,18 +2,13 @@ import { ACHIEVEMENTS } from "../../core/achievements";
 import { levelForXp, repoRank, xpForLevel } from "../../core/levels";
 import { CONFIG } from "../../shared/config";
 import { ACCESSORIES, BODY_COLORS, HAIR_COLORS, HAIR_STYLES, HATS, SKIN_TONES, unlocked } from "../../shared/cosmetics";
+import { formatTokens } from "../../shared/format";
 import type { Character, ContextInfo, Look, Session, Sidekick, Tier } from "../../shared/types";
 import { safeDraw, THEMES, type Theme } from "../engine/theme";
 import { api } from "../net";
 import { sessionOf, tierTitleOf, unboundLabel, type ClientState } from "../state";
 import { attempt, el, STATE_TEXT } from "./dom";
 
-/** 950 -> "950", 143_200 -> "143k", 1_200_000 -> "1.2M". */
-export function formatTokens(n: number): string {
-  if (n < 1_000) return String(Math.round(n));
-  if (n < 999_500) return `${Math.round(n / 1_000)}k`;
-  return `${(Math.round(n / 100_000) / 10).toString()}M`;
-}
 
 /** The fill as a whole percent, rounded down and capped at 100 for display. */
 export function contextPct(c: ContextInfo): number {

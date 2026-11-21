@@ -1,5 +1,5 @@
 import { expect, test } from "vitest";
-import { ackEpisode, contextLevel, contextLine, formatTokens, sidekickLine, formatDuration, lockLevel, renameTo, shouldAck, xpProgress } from "../../src/client/ui/inspector";
+import { ackEpisode, contextLevel, contextLine, sidekickLine, formatDuration, lockLevel, renameTo, shouldAck, xpProgress } from "../../src/client/ui/inspector";
 import { rosterKey, rosterRows, rosterSub } from "../../src/client/ui/roster";
 import { tickerItems } from "../../src/client/ui/ticker";
 import { applySnapshot, emptyState, tierTitleOf, unboundLabel } from "../../src/client/state";
@@ -126,14 +126,6 @@ test("an arrival has no tier title: plate, roster sub-line and inspector title l
 
 const ctx = (over: Partial<ContextInfo> = {}): ContextInfo =>
   ({ tokens: 143_000, peak: 143_000, limit: 200_000, estimated: true, compactions: 0, warned: false, seen: [], ...over });
-
-test("formatTokens", () => {
-  expect(formatTokens(950)).toBe("950");
-  expect(formatTokens(143_200)).toBe("143k");
-  expect(formatTokens(1_200_000)).toBe("1.2M");
-  expect(formatTokens(200_000)).toBe("200k");
-  expect(formatTokens(1_000_000)).toBe("1M");
-});
 
 test("contextLevel is calm under 60%, warm from 60%, hot from the warn threshold", () => {
   expect(contextLevel(ctx({ tokens: 119_999 }), 80)).toBe("calm");

@@ -46,18 +46,20 @@ test("seeded boundaries on the first reading count toward peak", () => {
   expect(sess(w).context).toMatchObject({ tokens: 30_000, peak: 120_000, limit: 200_000, compactions: 0 });
 });
 
-test("seeded auto boundaries teach the learned limit (the largest) but are not compactions", () => {
+test("seeded auto boundaries teach the learned limit (the last one) but are not compactions", () => {
   const w = working();
   const activity = sess(w).activity.length;
-  const ds = w.apply(ctx(30_000, [b("u1", { preTokens: 150_000 }), b("u2", { preTokens: 170_000 }), b("u3", { trigger: "manual", preTokens: 190_000 })]));
-  expect(learned(ds)).toEqual([{ type: "learned_limit", model: MODEL, limit: 170_000 }]);
+  const ds = w.apply(ctx(30_000, [b("u1", { preTokens: 170_000 }), b("u2", { preTokens: 150_000 }), b("u3", { trigger: "manual", preTokens: 190_000 })]));
+  expect(learned(ds)).toEqual([{ type: "learned_limit", model: MODEL, limit: 150_000 }]);
   expect(sess(w).context).toMatchObject({ compactions: 0, peak: 190_000, limit: 200_000 });
   expect(sess(w).activity).toHaveLength(activity);
   expect(sess(w).pendingStats.compactions).toBe(0);
   expect(credits(ds)).toEqual([]);
-  // not lowered, and not re-taught, by a later session's smaller seeded boundary
+  // the most recent wins: a later session's seeded boundary replaces it, up or down; the same value is not re-taught
   w.apply(ev("session_start", { at: 1000, sessionId: "s2", model: MODEL }));
-  expect(learned(w.apply(ctx(30_000, [b("v1", { preTokens: 160_000 })], { sessionId: "s2" })))).toEqual([]);
+  expect(learned(w.apply(ctx(30_000, [b("v1", { preTokens: 160_000 })], { sessionId: "s2" })))).toEqual([{ type: "learned_limit", model: MODEL, limit: 160_000 }]);
+  w.apply(ev("session_start", { at: 1000, sessionId: "s3", model: MODEL }));
+  expect(learned(w.apply(ctx(30_000, [b("x1", { preTokens: 160_000 })], { sessionId: "s3" })))).toEqual([]);
 });
 
 test("seeded auto boundaries teach nothing without a model", () => {
@@ -104,13 +106,28 @@ test("a manual boundary does not teach a limit", () => {
   expect(sess(w).context!.compactions).toBe(1);
 });
 
-test("a smaller auto preTokens does not lower the learned limit", () => {
+test("the most recent auto preTokens is the learned limit, lower or higher", () => {
   const w = working();
   w.apply(ctx(50_000));
   expect(learned(w.apply(ctx(30_000, [b("u1", { preTokens: 180_000 })])))).toHaveLength(1);
-  expect(learned(w.apply(ctx(30_000, [b("u1", { preTokens: 180_000 }), b("u2", { preTokens: 170_000 })])))).toEqual([]);
+  expect(learned(w.apply(ctx(30_000, [b("u1", { preTokens: 180_000 }), b("u2", { preTokens: 170_000 })])))).toEqual([{ type: "learned_limit", model: MODEL, limit: 170_000 }]);
   w.apply(ctx(40_000, [b("u1", { preTokens: 180_000 }), b("u2", { preTokens: 170_000 })]));
-  expect(sess(w).context!.limit).toBe(180_000);
+  expect(sess(w).context!.limit).toBe(200_000);           // the session's peak (180 000) is past the new estimate: it takes the next step
+  const w2 = working();
+  w2.apply(ctx(50_000));
+  w2.apply(ctx(30_000, [b("u1", { preTokens: 120_000 })]));
+  expect(sess(w2).context!.limit).toBe(120_000);
+  // two new boundaries in one reading: the later one wins, emitted once
+  expect(learned(w2.apply(ctx(30_000, [b("u1", { preTokens: 120_000 }), b("u2", { preTokens: 140_000 }), b("u3", { preTokens: 130_000 })])))).toEqual([{ type: "learned_limit", model: MODEL, limit: 130_000 }]);
+  // the same value again is not re-emitted
+  expect(learned(w2.apply(ctx(30_000, [b("u3", { preTokens: 130_000 }), b("u4", { preTokens: 130_000 })])))).toEqual([]);
+});
+
+test("a compaction line renders 999 600 tokens as 1M, not 1000k", () => {
+  const w = working();
+  w.apply(ctx(50_000));
+  w.apply(ctx(30_000, [b("u1", { preTokens: 999_600, postTokens: 30_000 })]));
+  expect(sess(w).activity.at(-1)!.text).toBe("Compacted 1M → 30k, auto");
 });
 
 test("a session with no model teaches no limit", () => {
@@ -156,6 +173,31 @@ test("the running-low notice fires once per fill and re-arms below the threshold
   expect(notices(w.apply(ctx(30_000, [b("u1")], { at: 10_000 })))).toEqual([]);
   expect(sess(w).context!.warned).toBe(false);
   expect(notices(w.apply(ctx(165_000, [b("u1")], { at: 11_000 })))).toHaveLength(1);
+});
+
+test("a limit that steps up never re-arms the low notice: one notice per fill on a large-window model", () => {
+  const w = working();
+  const fired: number[] = [];
+  for (const t of [160_000, 210_000, 405_000, 510_000, 805_000]) fired.push(notices(w.apply(ctx(t))).length);
+  expect(fired).toEqual([1, 0, 0, 0, 0]);
+  expect(sess(w).context).toMatchObject({ limit: 1_000_000, warned: true });
+  // a compaction re-arms; the climb past 80% of the sticky 1 000 000 limit fires exactly once more
+  const compacted = b("u1", { trigger: "manual", preTokens: 805_000, postTokens: 30_000 });
+  expect(notices(w.apply(ctx(30_000, [compacted])))).toEqual([]);
+  expect(sess(w).context!.warned).toBe(false);
+  const more: number[] = [];
+  for (const t of [400_000, 790_000, 810_000, 850_000, 900_000]) more.push(notices(w.apply(ctx(t, [compacted]))).length);
+  expect(more).toEqual([0, 0, 1, 0, 0]);
+  expect(sess(w).context!.limit).toBe(1_000_000);
+});
+
+test("a ratio below the re-arm point only re-arms when the tokens fell", () => {
+  const w = working();
+  w.apply(ctx(160_000));
+  w.apply(ctx(210_000));                                   // 42% of 500 000, but more tokens than before: still warned
+  expect(sess(w).context!.warned).toBe(true);
+  w.apply(ctx(200_000));                                   // fewer tokens and 40%: re-armed
+  expect(sess(w).context!.warned).toBe(false);
 });
 
 test("a drop to exactly 10 points below the threshold does not re-arm", () => {
@@ -247,7 +289,8 @@ test("an override sets the limit and stops estimation; null restores it", () => 
 test("updateSettings validates the context settings", () => {
   const w = newWorld();
   for (const contextWarnPct of [49, 96, 80.5]) expect(() => w.updateSettings({ contextWarnPct })).toThrow();
-  for (const contextLimitOverride of [0, -1, 1.5, "400000" as unknown as number]) expect(() => w.updateSettings({ contextLimitOverride })).toThrow();
+  for (const contextLimitOverride of [0, -1, 1.5, 9_999, 10_000.5, "400000" as unknown as number]) expect(() => w.updateSettings({ contextLimitOverride })).toThrow();
+  expect(w.updateSettings({ contextLimitOverride: 10_000 })[0]).toMatchObject({ settings: { contextLimitOverride: 10_000 } });
   expect(() => w.updateSettings({ notifyContext: "yes" as unknown as boolean })).toThrow();
   const ds = w.updateSettings({ contextWarnPct: 95, contextLimitOverride: 1_000_000, notifyContext: false });
   expect(ds).toEqual([{ type: "settings", settings: { ...CONFIG.defaultSettings, contextWarnPct: 95, contextLimitOverride: 1_000_000, notifyContext: false } }]);
@@ -298,4 +341,36 @@ test("seen keeps the newest 20 boundary uuids, and older boundaries in the tail 
   expect(c.seen).toHaveLength(CONFIG.context.seenMax);
   expect(c.seen).toEqual(more.slice(7).map(x => x.uuid));
   expect(c.compactions).toBe(2);
+});
+
+test("a changed override or warn threshold reaches live sessions at once, without a notice", () => {
+  const w = working();
+  w.apply(ctx(50_000));
+  const sessions = (ds: Delta[]) => ds.flatMap(d => (d.type === "session" ? [d.session] : []));
+  let ds = w.updateSettings({ contextLimitOverride: 100_000 });
+  expect(ds[0]!.type).toBe("settings");
+  expect(sessions(ds).map(s => s.context)).toEqual([expect.objectContaining({ tokens: 50_000, limit: 100_000, estimated: false, warned: false })]);
+  expect(sess(w).context).toMatchObject({ limit: 100_000, estimated: false });
+  // past the threshold now: warned, silently, so the next reading does not fire either
+  ds = w.updateSettings({ contextLimitOverride: 60_000 });
+  expect(notices(ds)).toEqual([]);
+  expect(sess(w).context).toMatchObject({ limit: 60_000, warned: true });
+  expect(notices(w.apply(ctx(55_000)))).toEqual([]);
+  // back to the estimate: the ratio falls only because the limit moved, so it stays warned
+  ds = w.updateSettings({ contextLimitOverride: null });
+  expect(sess(w).context).toMatchObject({ limit: 200_000, estimated: true, warned: true });
+  // a real token drop below the re-arm point re-arms it
+  w.apply(ctx(40_000));
+  expect(sess(w).context!.warned).toBe(false);
+  // the warn threshold: lowering it below the reading marks it warned without a notice
+  ds = w.updateSettings({ contextWarnPct: 50 });
+  expect(notices(ds)).toEqual([]);
+  expect(sessions(ds)).toEqual([]);                        // 40 000 of 200 000 is 20%: nothing changed
+  expect(notices(w.apply(ctx(95_000)))).toEqual([]);       // 47.5%: under the new threshold
+  expect(sess(w).context!.warned).toBe(false);
+  ds = w.updateSettings({ contextWarnPct: 50, contextLimitOverride: 180_000 });
+  expect(notices(ds)).toEqual([]);
+  expect(sessions(ds).map(s => s.context)).toEqual([expect.objectContaining({ limit: 180_000, warned: true })]);
+  // unrelated settings leave sessions alone
+  expect(w.updateSettings({ sound: false })).toHaveLength(1);
 });

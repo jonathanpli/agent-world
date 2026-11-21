@@ -17,6 +17,7 @@ export const CONFIG = {
     defaultLimit: 200_000,
     steps: [200_000, 500_000, 1_000_000],         // a reading above the estimated limit moves it to the first step at or above the session's peak
     warnMin: 50, warnMax: 95,                     // contextWarnPct range (whole percent)
+    overrideMin: 10_000,                          // the smallest contextLimitOverride accepted (tokens)
     rearmPoints: 10,                              // the low notice re-arms once the reading falls this many points below
     seenMax: 20,                                  // boundary uuids remembered per session
   },

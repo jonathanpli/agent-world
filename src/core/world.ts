@@ -1,5 +1,6 @@
 import { CONFIG } from "../shared/config";
 import { isValidLook } from "../shared/cosmetics";
+import { formatTokens } from "../shared/format";
 import type { AgentEvent, Character, ContextInfo, Delta, Look, Notice, NoticeKind, Repo, Session, Settings, Snapshot, Tier, ToolKind } from "../shared/types";
 import { pickCharacter } from "./assign";
 import { earned, ACHIEVEMENTS } from "./achievements";
@@ -28,8 +29,6 @@ const clone = <T>(x: T): T => structuredClone(x);
 const emptyStats = (): Session["pendingStats"] => ({ tasks: 0, tools: 0, compactions: 0, sidekicks: 0, failures: 0 });
 const TOOL_KINDS: ReadonlySet<string> = new Set<ToolKind>(["edit", "shell", "read", "web", "delegate", "other"]);
 const toolKind = (k: string | undefined): ToolKind => (k !== undefined && TOOL_KINDS.has(k) ? k as ToolKind : "other");
-/** Tokens for an activity line: 180000 → "180k". */
-const kTokens = (n: number): string => (n < 1000 ? String(n) : `${Math.round(n / 1000)}k`);
 
 /**
  * The limit a reading is measured against: the override if set, else the learned limit for the model, else the
@@ -173,7 +172,8 @@ export function createWorld(init: WorldInit, deps: WorldDeps): World {
 
   /**
    * Applies a context reading to a known session. The first reading only records the boundaries already in the tail
-   * (the largest automatic one still teaches the learned limit); later ones apply each boundary newer than the last one seen, once. Never moves state, attention or lastEventAt.
+   * (the last automatic one still teaches the learned limit); later ones apply each boundary newer than the last one
+   * seen, once. Never moves state, attention or lastEventAt.
    */
   function applyContext(s: Session, ev: AgentEvent): Delta[] {
     const prev = s.context;
@@ -188,21 +188,14 @@ export function createWorld(init: WorldInit, deps: WorldDeps): World {
     for (const b of fresh) {
       compactions++; applied++; warned = false;
       s.pendingStats.compactions++;
-      s.activity.push({ at: ev.at, kind: "context", text: `Compacted ${kTokens(b.preTokens)} → ${kTokens(b.postTokens)}, ${b.trigger}` });
-      if (b.trigger === "auto" && s.model !== null && b.preTokens > (learnedLimits.get(s.model) ?? 0)) {
-        learnedLimits.set(s.model, b.preTokens);
-        learned.push({ type: "learned_limit", model: s.model, limit: b.preTokens });
-      }
+      s.activity.push({ at: ev.at, kind: "context", text: `Compacted ${formatTokens(b.preTokens)} → ${formatTokens(b.postTokens)}, ${b.trigger}` });
     }
-    // boundaries already in the tail on the first reading are not compactions of this session, but an automatic one still
-    // shows where the model's window filled: the largest teaches the learned limit
-    const seededAuto = prev === null ? boundaries.filter(b => b.trigger === "auto").map(b => b.preTokens) : [];
-    if (seededAuto.length > 0 && s.model !== null) {
-      const most = Math.max(...seededAuto);
-      if (most > (learnedLimits.get(s.model) ?? 0)) {
-        learnedLimits.set(s.model, most);
-        learned.push({ type: "learned_limit", model: s.model, limit: most });
-      }
+    // the most recent automatic compaction teaches the learned limit, up or down. Boundaries already in the tail on the
+    // first reading are not compactions of this session, but an automatic one still shows where the window filled.
+    const latestAuto = (prev === null ? boundaries : fresh).filter(b => b.trigger === "auto").at(-1);
+    if (latestAuto !== undefined && s.model !== null && latestAuto.preTokens !== learnedLimits.get(s.model)) {
+      learnedLimits.set(s.model, latestAuto.preTokens);
+      learned.push({ type: "learned_limit", model: s.model, limit: latestAuto.preTokens });
     }
     if (s.activity.length > CONFIG.activityMax) s.activity.splice(0, s.activity.length - CONFIG.activityMax);
     const newSeen = [...seen, ...(prev === null ? boundaries : fresh).map(b => b.uuid).filter(u => !seen.includes(u))].slice(-CONFIG.context.seenMax);
@@ -210,12 +203,13 @@ export function createWorld(init: WorldInit, deps: WorldDeps): World {
     const tokens = ev.contextTokens ?? fresh.at(-1)?.postTokens ?? prev?.tokens ?? 0;
     // the highest count the session has shown: every reading and every applied (or, on the first reading, seeded) boundary
     const peak = Math.max(prev?.peak ?? 0, tokens, ...(prev === null ? boundaries : fresh).map(b => b.preTokens));
-    const { limit, estimated } = contextLimit(peak, settings.contextLimitOverride, s.model === null ? undefined : learnedLimits.get(s.model));
+    const { limit, estimated } = contextLimitFor(s, peak);
     const pct = settings.contextWarnPct;
-    // whole-number comparisons: tokens / limit against pct / 100
-    if (warned && tokens * 100 < (pct - CONFIG.context.rearmPoints) * limit) warned = false;
+    // whole-number comparisons: tokens / limit against pct / 100. Only a real fall in tokens re-arms (or a compaction,
+    // above): a ratio that fell because the limit stepped up does not.
+    if (warned && prev !== null && tokens < prev.tokens && tokens * 100 < (pct - CONFIG.context.rearmPoints) * limit) warned = false;
     const notices: Delta[] = [];
-    if (!warned && tokens * 100 >= pct * limit) {
+    if (!warned && atWarn(tokens, limit)) {
       warned = true;
       if (settings.notifyContext) {
         const repo = repos.get(s.repoId);
@@ -235,6 +229,32 @@ export function createWorld(init: WorldInit, deps: WorldDeps): World {
       if (c !== undefined && credited.length > 0) out.push(characterDelta(c));
     }
     out.push(...learned, sessionDelta(s), ...notices);
+    return out;
+  }
+
+  /** The limit a reading of session `s` at `peak` is measured against, under the current settings and learned limits. */
+  function contextLimitFor(s: Session, peak: number): { limit: number; estimated: boolean } {
+    return contextLimit(peak, settings.contextLimitOverride, s.model === null ? undefined : learnedLimits.get(s.model));
+  }
+
+  /** Whether `tokens` of `limit` is at or past the warn threshold. */
+  const atWarn = (tokens: number, limit: number): boolean => tokens * 100 >= settings.contextWarnPct * limit;
+
+  /**
+   * After a settings change, measures every session's last reading against the new limit and threshold. Emits no
+   * notice: a reading now past the threshold is only marked warned, and nothing re-arms (the tokens did not fall).
+   */
+  function remeasureContexts(): Delta[] {
+    const out: Delta[] = [];
+    for (const s of sessions.values()) {
+      const c = s.context;
+      if (c === null) continue;
+      const { limit, estimated } = contextLimitFor(s, c.peak);
+      const next: ContextInfo = { ...c, limit, estimated, warned: c.warned || atWarn(c.tokens, limit) };
+      if (sameContext(c, next)) continue;
+      s.context = next;
+      out.push(sessionDelta(s));
+    }
     return out;
   }
 
@@ -478,7 +498,8 @@ export function createWorld(init: WorldInit, deps: WorldDeps): World {
     }
     if (patch.contextLimitOverride !== undefined) {
       const o = patch.contextLimitOverride;
-      if (o !== null && (!Number.isInteger(o) || o < 1)) throw new Error("contextLimitOverride must be a positive integer or null");
+      const min = CONFIG.context.overrideMin;
+      if (o !== null && (!Number.isInteger(o) || o < min)) throw new Error(`contextLimitOverride must be an integer of at least ${min} or null`);
       next.contextLimitOverride = o;
     }
     for (const k of ["notifyNeedsInput", "notifyDone", "sound", "notifyContext"] as const) {
@@ -486,8 +507,9 @@ export function createWorld(init: WorldInit, deps: WorldDeps): World {
       if (typeof patch[k] !== "boolean") throw new Error(`${k} must be a boolean`);
       next[k] = patch[k];
     }
+    const remeasure = next.contextLimitOverride !== settings.contextLimitOverride || next.contextWarnPct !== settings.contextWarnPct;
     settings = next;
-    return [{ type: "settings", settings: clone(settings) }];
+    return [{ type: "settings", settings: clone(settings) }, ...(remeasure ? remeasureContexts() : [])];
   }
 
   function snapshot(now: number, demo: boolean): Snapshot {
