@@ -1,0 +1,24 @@
+{
+  "name": "agent-world",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "concurrently -k \"tsx watch src/server/main.ts\" \"vite\"",
+    "dev:demo": "concurrently -k \"tsx watch src/server/main.ts --demo\" \"vite --mode demo\"",
+    "build": "vite build",
+    "start": "npm run build && tsx src/server/main.ts",
+    "test": "vitest run",
+    "typecheck": "tsc --noEmit",
+    "hooks:install": "tsx scripts/hooks.ts install",
+    "hooks:uninstall": "tsx scripts/hooks.ts uninstall"
+  },
+  "devDependencies": {
+    "@types/node": "^26.6.6",
+    "concurrently": "^10.0.7",
+    "tsx": "^4.23.15",
+    "typescript": "^7.0.2",
+    "vite": "^8.3.8",
+    "vitest": "^5.1.1"
+  }
+}
