@@ -137,3 +137,11 @@ test("a directory or a missing path → nothing", async () => {
   expect(await readTranscript(dir)).toEqual(NOTHING);
   expect(await readTranscript(join(dir, "missing.jsonl"))).toEqual(NOTHING);
 });
+
+test("boundary token counts must be finite and >= 0; a zero postTokens is no reading", async () => {
+  const bad = [boundary("a", -1, 5), boundary("b", 5, -1), line({ type: "system", subtype: "compact_boundary", uuid: "c", compactMetadata: { trigger: "auto", preTokens: null, postTokens: 5 } })];
+  expect(await readTranscript(file("t.jsonl", usage(1, 0, 40_000) + bad.join("")))).toEqual({ model: "claude-opus-5-5", contextTokens: 40_001, boundaries: [] });
+  const zero = await readTranscript(file("t.jsonl", usage(1, 0, 40_000) + boundary("z", 150_000, 0)));
+  expect(zero.contextTokens).toBeNull();
+  expect(zero.boundaries).toEqual([{ uuid: "z", trigger: "auto", preTokens: 150_000, postTokens: 0 }]);
+});

@@ -30,10 +30,12 @@ async function tail(path: string): Promise<string | null> {
   }
 }
 
+const validTokens = (n: unknown): n is number => typeof n === "number" && Number.isFinite(n) && n >= 0;
+
 function asBoundary(e: Record<string, unknown>): Compaction | null {
   if (e.type !== "system" || e.subtype !== "compact_boundary" || typeof e.uuid !== "string" || !isRecord(e.compactMetadata)) return null;
   const { trigger, preTokens, postTokens } = e.compactMetadata;
-  if ((trigger !== "auto" && trigger !== "manual") || typeof preTokens !== "number" || typeof postTokens !== "number") return null;
+  if ((trigger !== "auto" && trigger !== "manual") || !validTokens(preTokens) || !validTokens(postTokens)) return null;
   return { uuid: e.uuid, trigger, preTokens, postTokens };
 }
 
@@ -62,7 +64,8 @@ export async function readTranscript(path: string): Promise<TranscriptInfo> {
       const sum = count(u.input_tokens) + count(u.cache_creation_input_tokens) + count(u.cache_read_input_tokens);
       if (sum > 0) { usageTokens = sum; afterUsage = null; }
     }
-    info.contextTokens = afterUsage?.postTokens ?? usageTokens;
+    // a boundary reporting 0 tokens after compaction is no reading
+    info.contextTokens = afterUsage !== null && afterUsage.postTokens > 0 ? afterUsage.postTokens : afterUsage !== null ? null : usageTokens;
     return info;
   } catch {
     return NOTHING();
