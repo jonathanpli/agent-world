@@ -53,6 +53,11 @@ export const CONFIG = {
     pauseMs: [5_000, 30_000],
     endChance: 0.1, respawnMaxMs: 10_000, endDelayMs: [1_000, 3_000],
     modelChangeChance: 0.05,
+    contextStartTokens: [8_000, 20_000], contextGrowTokens: [6_000, 14_000],   // a session's first reading; the climb per tool
+    compactAtFraction: 0.85, compactToTokens: [15_000, 40_000],               // of context.defaultLimit; the reading after an auto compaction
+    sidekickChance: 0.15, sidekickMax: 3, sidekickTools: [2, 5], sidekickGapMs: [1_000, 3_000],
+    sidekickTypes: ["Explore", "general-purpose", "Plan"],
+    toolFailChance: 0.08,
   },
   client: {
     noticeMax: 50,

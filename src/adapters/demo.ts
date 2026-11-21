@@ -1,5 +1,5 @@
 import { CONFIG } from "../shared/config";
-import type { AgentEvent, Effort, Tier } from "../shared/types";
+import type { AgentEvent, Compaction, Effort, Tier, ToolKind } from "../shared/types";
 
 export type Demo = { step(): void };     // call once per simulated second
 
@@ -12,15 +12,31 @@ const PROMPTS = [
   "Write migration for user preferences", "Speed up the product search query", "Add dark mode to the settings screen",
   "Upgrade the Terraform modules", "Handle offline mode in the sync service",
 ];
-const TOOLS = [
-  "Read src/index.ts", "Edit src/routes/orders.ts", "Bash npm test", "Grep for TODO", "Read package.json",
-  "Edit src/components/Cart.tsx", "Bash git diff", "Write tests/checkout.test.ts", "Bash npm run build", "Glob **/*.yaml",
+type DemoTool = { tool: string; summary: string; toolKind: ToolKind };
+const TOOLS: DemoTool[] = [
+  { tool: "Read", summary: "Read src/index.ts", toolKind: "read" },
+  { tool: "Edit", summary: "Edit src/routes/orders.ts", toolKind: "edit" },
+  { tool: "Bash", summary: "Bash npm test", toolKind: "shell" },
+  { tool: "Grep", summary: "Grep for TODO", toolKind: "read" },
+  { tool: "WebFetch", summary: "Fetch the framework migration guide", toolKind: "web" },
+  { tool: "Edit", summary: "Edit src/components/Cart.tsx", toolKind: "edit" },
+  { tool: "Bash", summary: "Bash git diff", toolKind: "shell" },
+  { tool: "Task", summary: "Delegate a codebase search", toolKind: "delegate" },
+  { tool: "Write", summary: "Write tests/checkout.test.ts", toolKind: "edit" },
+  { tool: "Glob", summary: "Glob **/*.yaml", toolKind: "other" },
+  { tool: "WebSearch", summary: "Search for the library changelog", toolKind: "web" },
+  { tool: "TodoWrite", summary: "Update the task list", toolKind: "other" },
 ];
+const SIDEKICK_TOOLS = TOOLS.filter(t => t.toolKind === "read" || t.toolKind === "web" || t.toolKind === "other");
 const SUMMARIES = ["Done, tests pass", "Implemented and verified", "Fixed, added a regression test", "Refactor complete"];
 const INPUT_REASONS = ["Permission needed to run a command", "Which approach do you prefer?", "Confirm before deleting files"];
 
 type Phase = "prompt" | "tool" | "resolve" | "finish" | "pause" | "end";
-type Sim = { id: string; repoPath: string; tier: Tier; effort: Effort; phase: Phase; nextAt: number; toolsLeft: number; changeModel: boolean };
+type Sidekick = { id: string; type: string; nextAt: number; toolsLeft: number };
+type Sim = {
+  id: string; repoPath: string; tier: Tier; effort: Effort; phase: Phase; nextAt: number; toolsLeft: number; changeModel: boolean;
+  tokens: number; boundaries: Compaction[]; compactNext: boolean; sidekicks: Sidekick[];
+};
 
 export function createDemo(opts: { emit: (ev: AgentEvent) => void; rng: () => number; now: () => number }): Demo {
   const { emit, rng, now } = opts;
@@ -28,6 +44,8 @@ export function createDemo(opts: { emit: (ev: AgentEvent) => void; rng: () => nu
   const sims: Sim[] = [];
   const spawnAt: number[] = [];
   let seq = 0;
+  let subSeq = 0;
+  let boundarySeq = 0;
   let started = false;
 
   const pick = <T>(xs: readonly T[]): T => xs[Math.floor(rng() * xs.length)]!;
@@ -40,9 +58,45 @@ export function createDemo(opts: { emit: (ev: AgentEvent) => void; rng: () => nu
     const s: Sim = {
       id: `demo-${++seq}`, repoPath: pick(REPOS), tier: pick(TIERS), effort: pick(EFFORTS),
       phase: "prompt", nextAt: t + between(cfg.toolGapMs), toolsLeft: 0, changeModel: false,
+      tokens: int(cfg.contextStartTokens), boundaries: [], compactNext: false, sidekicks: [],
     };
     sims.push(s);
     send(s, "session_start", { model: MODELS[s.tier], tier: s.tier, effort: s.effort });
+  }
+
+  const sendTool = (s: Sim, t: DemoTool, agent?: Sidekick): void => {
+    const detail: Record<string, string> = { tool: t.tool, summary: t.summary, toolKind: t.toolKind };
+    if (agent) { detail.agentId = agent.id; detail.agentType = agent.type; }
+    send(s, "tool", rng() < cfg.toolFailChance ? { detail, failed: true } : { detail });
+  };
+
+  // every context event lists all boundaries so far; the first one (empty list) is the session's history
+  function sendContext(s: Sim): void {
+    const limit = CONFIG.context.defaultLimit;
+    if (s.compactNext) {
+      const preTokens = s.tokens, postTokens = int(cfg.compactToTokens);
+      s.boundaries.push({ uuid: `${s.id}-compact-${++boundarySeq}`, trigger: "auto", preTokens, postTokens });
+      s.tokens = postTokens; s.compactNext = false;
+    } else {
+      s.tokens += int(cfg.contextGrowTokens);
+      if (s.tokens >= limit * cfg.compactAtFraction) s.compactNext = true;
+    }
+    send(s, "context", { contextTokens: s.tokens, boundaries: s.boundaries.map(b => ({ ...b })) });
+  }
+
+  function startSidekick(s: Sim, t: number): void {
+    const k: Sidekick = { id: `demo-agent-${++subSeq}`, type: pick(cfg.sidekickTypes), nextAt: t + between(cfg.sidekickGapMs), toolsLeft: int(cfg.sidekickTools) };
+    s.sidekicks.push(k);
+    send(s, "sub_start", { detail: { agentId: k.id, agentType: k.type } });
+  }
+
+  function stepSidekicks(s: Sim, t: number): void {
+    for (const k of [...s.sidekicks]) {
+      if (k.nextAt > t) continue;
+      if (k.toolsLeft-- > 0) { sendTool(s, pick(SIDEKICK_TOOLS), k); k.nextAt = t + between(cfg.sidekickGapMs); continue; }
+      send(s, "sub_end", { detail: { agentId: k.id, agentType: k.type } });
+      s.sidekicks.splice(s.sidekicks.indexOf(k), 1);
+    }
   }
 
   function advance(s: Sim, t: number): void {
@@ -52,7 +106,9 @@ export function createDemo(opts: { emit: (ev: AgentEvent) => void; rng: () => nu
         s.toolsLeft = int(cfg.toolsPerTask); s.phase = "tool"; s.nextAt = t + between(cfg.toolGapMs);
         break;
       case "tool":
-        send(s, "tool", { detail: { text: pick(TOOLS) } });
+        sendTool(s, pick(TOOLS));
+        sendContext(s);
+        if (s.sidekicks.length < cfg.sidekickMax && rng() < cfg.sidekickChance) startSidekick(s, t);
         if (--s.toolsLeft > 0) { s.nextAt = t + between(cfg.toolGapMs); break; }
         if (rng() < cfg.needsInputChance) {
           send(s, "needs_input", { detail: { reason: pick(INPUT_REASONS) } });
@@ -60,7 +116,8 @@ export function createDemo(opts: { emit: (ev: AgentEvent) => void; rng: () => nu
         } else { s.phase = "finish"; s.nextAt = t + between(cfg.toolGapMs); }
         break;
       case "resolve":
-        send(s, "tool", { detail: { text: pick(TOOLS) } });
+        sendTool(s, pick(TOOLS));
+        sendContext(s);
         s.phase = "finish"; s.nextAt = t + between(cfg.toolGapMs);
         break;
       case "finish": {
@@ -82,6 +139,7 @@ export function createDemo(opts: { emit: (ev: AgentEvent) => void; rng: () => nu
         s.phase = "prompt"; advance(s, t);
         break;
       case "end":
+        for (const k of s.sidekicks) send(s, "sub_end", { detail: { agentId: k.id, agentType: k.type } });
         send(s, "session_end");
         sims.splice(sims.indexOf(s), 1);
         spawnAt.push(t + rng() * cfg.respawnMaxMs);
@@ -96,7 +154,7 @@ export function createDemo(opts: { emit: (ev: AgentEvent) => void; rng: () => nu
         started = true;
         for (let n = cfg.sessionsStart; n > 0; n--) spawn(t);
       }
-      for (const s of [...sims]) if (s.nextAt <= t) advance(s, t);
+      for (const s of [...sims]) { stepSidekicks(s, t); if (s.nextAt <= t) advance(s, t); }
       for (let i = spawnAt.length - 1; i >= 0; i--) {
         if (spawnAt[i]! <= t) { spawnAt.splice(i, 1); spawn(t); }
       }
