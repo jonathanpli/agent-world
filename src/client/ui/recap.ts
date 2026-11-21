@@ -45,7 +45,23 @@ export function localDay(from: Date = new Date(), back = 0): string {
   return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`;
 }
 
-const isEmpty = (r: Recap): boolean => r.totals.tasks === 0 && r.totals.tools === 0 && r.totals.xp === 0;
+/** True when the day has nothing at all to show: every total is zero. */
+export const recapIsEmpty = (r: Recap): boolean => Object.values(r.totals).every(n => n === 0);
+
+/** The smallest box holding every pixel with any alpha, or null when the image is blank. Used to crop the MVP sprite. */
+export function spriteBounds(img: { width: number; height: number; data: ArrayLike<number> }): { x: number; y: number; w: number; h: number } | null {
+  let x0 = img.width, y0 = img.height, x1 = -1, y1 = -1;
+  for (let y = 0; y < img.height; y++) {
+    for (let x = 0; x < img.width; x++) {
+      if (img.data[(y * img.width + x) * 4 + 3] === 0) continue;
+      if (x < x0) x0 = x;
+      if (x > x1) x1 = x;
+      if (y < y0) y0 = y;
+      if (y > y1) y1 = y;
+    }
+  }
+  return x1 < 0 ? null : { x: x0, y: y0, w: x1 - x0 + 1, h: y1 - y0 + 1 };
+}
 const hasActivity = (t: Recap["repos"][number]): boolean => t.tasks > 0 || t.tools > 0 || t.xp > 0;
 
 /** The recap dialog. `open(day)` shows that day (default today) and fetches it each time. */
@@ -78,7 +94,7 @@ export function mount(root: HTMLDialogElement, deps: { state: ClientState; drawS
     next.disabled = r.nextDay === null;
     prev.dataset["day"] = r.prevDay ?? "";
     next.dataset["day"] = r.nextDay ?? "";
-    if (isEmpty(r)) {
+    if (recapIsEmpty(r)) {
       body.replaceChildren(el("p", { class: "dim" }, r.day === r.today ? "Nothing yet today" : "Nothing that day"));
       return;
     }
@@ -105,7 +121,8 @@ export function mount(root: HTMLDialogElement, deps: { state: ClientState; drawS
   function load(day?: string): void {
     const mine = ++token;
     current = day ?? "";
-    void attempt(api.recap(day).then(r => { if (mine === token) show(r); }), msg => { if (mine === token) error.textContent = msg; });
+    void attempt(api.recap(day).then(r => { if (mine === token) show(r); }), msg => { if (mine === token) error.textContent = msg; })
+      .then(ok => { if (!ok && mine === token) body.replaceChildren(el("p", { class: "dim" }, "Could not load")); });
   }
 
   prev.addEventListener("click", () => { if (prev.dataset["day"]) load(prev.dataset["day"]); });

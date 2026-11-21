@@ -97,7 +97,7 @@ for (const theme of THEMES) test(`${theme.id}: every optional extra it has draws
 
 test("the engine defaults draw without throwing", () => {
   expect(() => runExtras(DEFAULTS, mockCtx())).not.toThrow();
-  expect(() => drawSidekicks(mockCtx(), getTheme("office"), getTheme("office"), { x: 60, y: 80 }, sks(5), null, 9_000, 1)).not.toThrow();
+  expect(() => drawSidekicks(mockCtx(), getTheme("office"), { x: 60, y: 80 }, sks(5), null, 9_000, 1)).not.toThrow();
 });
 
 /** Office without any of the extras: what every world looked like before them. */
@@ -111,10 +111,10 @@ test("a theme with none of the extras draws through DEFAULTS", () => {
   const plain = bare("plain");
   const spies = EXTRAS.map(k => vi.spyOn(DEFAULTS, k));
   const ctx = mockCtx();
-  drawAction(ctx, plain, plain, { x: 60, y: 80 }, "shell", true, 2);
-  drawGauge(ctx, plain, plain, { x: 60, y: 80 }, 2, true, 0.5);
-  drawCompaction(ctx, plain, plain, { x: 60, y: 80 }, 4);
-  drawSidekicks(ctx, plain, plain, { x: 60, y: 80 }, sks(4), "sk1", 1_000, 0.5);
+  drawAction(ctx, plain, { x: 60, y: 80 }, "shell", true, 2);
+  drawGauge(ctx, plain, { x: 60, y: 80 }, 2, true, 0.5);
+  drawCompaction(ctx, plain, { x: 60, y: 80 }, 4);
+  drawSidekicks(ctx, plain, { x: 60, y: 80 }, sks(4), "sk1", 1_000, 0.5);
   const [action, sidekick, gauge, compaction] = spies;
   expect(action).toHaveBeenCalledWith(ctx, { x: 60, y: 80 }, "shell", true, 2);
   expect(gauge).toHaveBeenCalledWith(ctx, { x: 60, y: 80 }, 2, true, 0.5);
@@ -123,15 +123,28 @@ test("a theme with none of the extras draws through DEFAULTS", () => {
   for (const s of spies) s.mockRestore();
 });
 
-test("a theme whose drawAction throws falls back to the defaults without throwing", () => {
+for (const id of ["space", "office"]) test(`${id}: an extra that throws draws the engine default, never another theme's art`, () => {
   const errors = vi.spyOn(console, "error").mockImplementation(() => {});
-  const bad = { ...bare("bad-action"), drawAction: () => { throw new Error("boom"); } } as Theme;
-  const fallback = bare("plain-fallback");
-  const spy = vi.spyOn(DEFAULTS, "drawAction");
+  const boom = (): never => { throw new Error("boom"); };
+  // every extra throws, including office's own: the engine default is the last fallback
+  const bad = { ...getTheme(id), id: `${id}-broken`, drawAction: boom, drawSidekick: boom, drawContextGauge: boom, drawCompaction: boom } as Theme;
+  const office = getTheme("office");
+  const officeSpies = EXTRAS.map(k => vi.spyOn(office, k));
+  const defaultSpies = EXTRAS.map(k => vi.spyOn(DEFAULTS, k));
   const ctx = mockCtx();
-  expect(() => drawAction(ctx, bad, fallback, { x: 60, y: 80 }, "edit", false, 0)).not.toThrow();
-  expect(spy).toHaveBeenCalledTimes(1);
-  expect(errors).toHaveBeenCalledTimes(1);
-  spy.mockRestore();
+  expect(() => {
+    drawAction(ctx, bad, { x: 60, y: 80 }, "edit", false, 0);
+    drawGauge(ctx, bad, { x: 60, y: 80 }, 1, false, 0);
+    drawCompaction(ctx, bad, { x: 60, y: 80 }, 2);
+    drawSidekicks(ctx, bad, { x: 60, y: 80 }, sks(2), null, 1_000, 0);
+  }).not.toThrow();
+  const [action, sidekick, gauge, compaction] = defaultSpies;
+  expect(action).toHaveBeenCalledTimes(1);
+  expect(gauge).toHaveBeenCalledTimes(1);
+  expect(compaction).toHaveBeenCalledTimes(1);
+  expect(sidekick).toHaveBeenCalledTimes(2);
+  for (const spy of officeSpies) expect(spy).not.toHaveBeenCalled();
+  expect(errors).toHaveBeenCalledTimes(1);               // reported once per theme
+  for (const spy of [...officeSpies, ...defaultSpies]) spy.mockRestore();
   errors.mockRestore();
 });

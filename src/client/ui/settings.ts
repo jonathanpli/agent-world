@@ -33,7 +33,7 @@ export function mount(root: HTMLDialogElement, deps: { state: ClientState }): { 
   warn.max = String(CONFIG.context.warnMax);
   warn.step = "1";
   const limit = el("input", { type: "number" });
-  limit.min = "1";
+  limit.min = String(CONFIG.context.overrideMin);
   limit.step = "1";
   limit.placeholder = "estimate";
   const useEstimate = el("button", { type: "button" }, "Use estimate");
@@ -53,7 +53,7 @@ export function mount(root: HTMLDialogElement, deps: { state: ClientState }): { 
     field("Chime", sound),
     field("Context running low", ctxNotify),
     field("Warn at context %", warn, `${CONFIG.context.warnMin} to ${CONFIG.context.warnMax}.`),
-    field("Context limit override", el("span", { class: "inline" }, limit, useEstimate), "Tokens. Leave empty to estimate it from each model."),
+    field("Context limit override", el("span", { class: "inline" }, limit, useEstimate), `Tokens, at least ${CONFIG.context.overrideMin.toLocaleString("en-US")}. Leave empty to estimate it from each model.`),
     field("Roster cap", cap, `Named characters, 1 to ${CONFIG.rosterCapMax}. Past it, sessions show as temps.`),
     el("div", { class: "notify-row" }, enable, permText),
     error,

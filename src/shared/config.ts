@@ -62,6 +62,8 @@ export const CONFIG = {
   },
   client: {
     noticeMax: 50,
+    nudgeCheckMs: 60_000,                         // how often an open page checks whether the morning recap nudge is due
+    recapSpriteScale: 2,                          // the recap card's MVP sprite, cropped to its pixels, at this scale
     reconnectMs: 2_000,
     speed: { walk: 40, float: 25, swim: 30 },     // px/s
     bob: { walk: { px: 0, hz: 0 }, float: { px: 3, hz: 0.3 }, swim: { px: 2, hz: 0.7 } },   // sine bob, drawing only

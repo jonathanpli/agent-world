@@ -1,6 +1,6 @@
 import { expect, test } from "vitest";
 import { compactionText, applyDeltas, applySnapshot, emptyState } from "../../src/client/state";
-import { nudgeText, recapExtras, recapHeadline, shouldNudge, streakText } from "../../src/client/ui/recap";
+import { nudgeText, recapExtras, recapHeadline, recapIsEmpty, shouldNudge, spriteBounds, streakText } from "../../src/client/ui/recap";
 import { tickerItems } from "../../src/client/ui/ticker";
 import type { Recap, RecapTotals } from "../../src/shared/types";
 import { char, repo, session, snap } from "../helpers/clientFixtures";
@@ -66,4 +66,22 @@ test("an unbound session is named by its label", () => {
   applySnapshot(s, snap({ sessions: [session("k", null, "r1", { context: ctx(100_000, 0) })] }));
   applyDeltas(s, [{ type: "session", session: session("k", null, "r1", { context: ctx(10_000, 1) }) }]);
   expect(s.notes[0]!.text).toBe("Temp compacted context (100k → 10k)");
+});
+
+test("a day is empty only when every total is zero", () => {
+  expect(recapIsEmpty(recap())).toBe(true);
+  for (const k of ["tasks", "tools", "failures", "xp", "levels", "compactions", "sidekicks"] as const) {
+    expect(recapIsEmpty(recap({ [k]: 1 }))).toBe(false);
+  }
+});
+
+test("spriteBounds: the smallest box holding every visible pixel, or null for a blank image", () => {
+  const img = (w: number, h: number, opaque: [number, number][]) => {
+    const data = new Uint8ClampedArray(w * h * 4);
+    for (const [x, y] of opaque) data[(y * w + x) * 4 + 3] = 255;
+    return { width: w, height: h, data };
+  };
+  expect(spriteBounds(img(32, 40, []))).toBeNull();
+  expect(spriteBounds(img(32, 40, [[10, 8], [21, 35], [15, 20]]))).toEqual({ x: 10, y: 8, w: 12, h: 28 });
+  expect(spriteBounds(img(32, 40, [[0, 0]]))).toEqual({ x: 0, y: 0, w: 1, h: 1 });
 });

@@ -5,7 +5,7 @@ import { api, connect } from "./net";
 import { attentionCount, deliver, tabTitle } from "./notify";
 import { applyDeltas, applySnapshot, emptyState } from "./state";
 import { mount as mountInspector } from "./ui/inspector";
-import { localDay, mount as mountRecap, nudgeText, shouldNudge } from "./ui/recap";
+import { localDay, mount as mountRecap, nudgeText, shouldNudge, spriteBounds } from "./ui/recap";
 import { mount as mountRoster } from "./ui/roster";
 import { mount as mountSettings } from "./ui/settings";
 import { mount as mountTicker } from "./ui/ticker";
@@ -35,17 +35,28 @@ const ticker = mountTicker($("ticker"), { state });
 const settings = mountSettings(settingsDialog, { state });
 const toasts = mountToasts($("toasts"));
 
-/** Draws a character's sprite onto a small canvas, as the inspector's Look tab does; does nothing for one this browser has no data on. */
+/**
+ * Draws a character's sprite onto a small canvas, cropped to the pixels it covers and shown at
+ * CONFIG.client.recapSpriteScale, so it sits on one row with its label; leaves `cv` untouched (0×0) for a character
+ * this browser has no data on, or a sprite that drew nothing.
+ */
 function drawSprite(cv: HTMLCanvasElement, characterId: string): void {
   const c = state.characters.get(characterId);
   if (c === undefined) return;
-  cv.width = 32; cv.height = 40;
-  cv.style.width = `${cv.width * CONFIG.client.previewScale}px`;
-  cv.style.height = `${cv.height * CONFIG.client.previewScale}px`;
+  const work = document.createElement("canvas");
+  work.width = 32; work.height = 40;
+  const wctx = work.getContext("2d", { willReadFrequently: true });
+  if (wctx === null) return;
+  wctx.imageSmoothingEnabled = false;
+  safeDraw(getTheme(state.settings.theme), THEMES[0]!, t => t.drawCharacter(wctx, { x: 16, y: 36 }, c.look, c.tier, "off_duty", "medium", 0, 1, false), wctx);
+  const b = spriteBounds(wctx.getImageData(0, 0, work.width, work.height));
   const ctx = cv.getContext("2d");
-  if (ctx === null) return;
+  if (b === null || ctx === null) return;
+  cv.width = b.w; cv.height = b.h;
+  cv.style.width = `${b.w * CONFIG.client.recapSpriteScale}px`;
+  cv.style.height = `${b.h * CONFIG.client.recapSpriteScale}px`;
   ctx.imageSmoothingEnabled = false;
-  safeDraw(getTheme(state.settings.theme), THEMES[0]!, t => t.drawCharacter(ctx, { x: 16, y: 36 }, c.look, c.tier, "off_duty", "medium", 0, 1, false), ctx);
+  ctx.drawImage(work, b.x, b.y, b.w, b.h, 0, 0, b.w, b.h);
 }
 const recap = mountRecap(recapDialog, { state, drawSprite });
 const NUDGE_KEY = "agent-world:recap-nudge";
@@ -146,4 +157,17 @@ connect({
   },
 });
 sync();
-morningNudge().catch(e => console.error("agent-world: recap nudge failed", e));
+
+/**
+ * Checks for the morning nudge now, then every minute and whenever the page comes back into view, so a tab left
+ * open overnight still gets it (the stored day keeps it to once a day). A hidden page waits until it is seen.
+ */
+let nudging = false;
+function checkNudge(): void {
+  if (nudging || document.visibilityState !== "visible") return;
+  nudging = true;
+  morningNudge().catch(e => console.error("agent-world: recap nudge failed", e)).finally(() => { nudging = false; });
+}
+checkNudge();
+setInterval(checkNudge, CONFIG.client.nudgeCheckMs);
+document.addEventListener("visibilitychange", checkNudge);

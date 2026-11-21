@@ -242,7 +242,7 @@ export function startEngine(canvas: HTMLCanvasElement, state: ClientState): Engi
 
       for (const { spot, session, extras } of bound.values()) {
         const c = session.context;
-        if (extras.gauge && c !== null) drawGauge(ctx, theme, fallback, spot, gaugeStep(c), contextUsePct(c) >= state.settings.contextWarnPct, t);
+        if (extras.gauge && c !== null) drawGauge(ctx, theme, spot, gaugeStep(c), contextUsePct(c) >= state.settings.contextWarnPct, t);
       }
 
       const bob = CONFIG.client.bob[active.movement];
@@ -267,14 +267,14 @@ export function startEngine(canvas: HTMLCanvasElement, state: ClientState): Engi
         draw(th => th.drawCharacter(ctx, at, w.look, w.tier, pose, w.effort, f, facing, a.moving));
         drawn.push({ id: a.id, at, w });
         const b = bound.get(a.id);
-        if (b !== undefined && b.extras.sidekicks) drawSidekicks(ctx, theme, fallback, b.spot, b.session.sidekicks, b.extras.busySidekick, wall, t);
+        if (b !== undefined && b.extras.sidekicks) drawSidekicks(ctx, theme, b.spot, b.session.sidekicks, b.extras.busySidekick, wall, t);
       }
 
       // the main agent's tool action plays at the work spot; a drawn sidekick's own tool only makes it busy (above)
       for (const [id, { spot, extras }] of bound) {
-        if (extras.action !== null) drawAction(ctx, theme, fallback, spot, extras.action.kind, extras.action.failed, frameSince(extras.action.startedAt));
+        if (extras.action !== null) drawAction(ctx, theme, spot, extras.action.kind, extras.action.failed, frameSince(extras.action.startedAt));
         const started = compactions.get(id)?.startedAt ?? null;
-        if (extras.compaction && started !== null) drawCompaction(ctx, theme, fallback, spot, frameSince(started));
+        if (extras.compaction && started !== null) drawCompaction(ctx, theme, spot, frameSince(started));
       }
 
       particles = stepParticles(particles, dt);

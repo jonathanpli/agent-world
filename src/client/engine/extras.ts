@@ -78,18 +78,31 @@ export const DEFAULTS: Required<Pick<Theme, "drawAction" | "drawSidekick" | "dra
   drawAction: plainAction, drawSidekick: plainSidekick, drawContextGauge: plainGauge, drawCompaction: plainCompaction,
 };
 
-// The loop draws every extra through these: the theme's member or DEFAULTS, under safeDraw with the fallback theme.
-
-export function drawGauge(ctx: Ctx, theme: Theme, fallback: Theme, spot: Point, step: 0 | 1 | 2 | 3, hot: boolean, t: number): void {
-  safeDraw(theme, fallback, th => (th.drawContextGauge ?? DEFAULTS.drawContextGauge)(ctx, spot, step, hot, t), ctx);
+/** `t` without its extras, so every extra drawn with it is the engine default. Cached per theme. */
+const plainOf = new WeakMap<Theme, Theme>();
+function enginePlain(t: Theme): Theme {
+  let p = plainOf.get(t);
+  if (p === undefined) {
+    const { drawAction: _a, drawSidekick: _s, drawContextGauge: _g, drawCompaction: _c, ...rest } = t;
+    p = { ...rest, id: `${t.id} (engine defaults)` };
+    plainOf.set(t, p);
+  }
+  return p;
 }
 
-export function drawAction(ctx: Ctx, theme: Theme, fallback: Theme, spot: Point, kind: ToolKind, failed: boolean, frame: number): void {
-  safeDraw(theme, fallback, th => (th.drawAction ?? DEFAULTS.drawAction)(ctx, spot, kind, failed, frame), ctx);
+// The loop draws every extra through these: the theme's member or DEFAULTS, under safeDraw. If the theme's member
+// throws, the engine default draws instead (never another theme's art), and nothing ever throws out of the loop.
+
+export function drawGauge(ctx: Ctx, theme: Theme, spot: Point, step: 0 | 1 | 2 | 3, hot: boolean, t: number): void {
+  safeDraw(theme, enginePlain(theme), th => (th.drawContextGauge ?? DEFAULTS.drawContextGauge)(ctx, spot, step, hot, t), ctx);
 }
 
-export function drawCompaction(ctx: Ctx, theme: Theme, fallback: Theme, spot: Point, frame: number): void {
-  safeDraw(theme, fallback, th => (th.drawCompaction ?? DEFAULTS.drawCompaction)(ctx, spot, frame), ctx);
+export function drawAction(ctx: Ctx, theme: Theme, spot: Point, kind: ToolKind, failed: boolean, frame: number): void {
+  safeDraw(theme, enginePlain(theme), th => (th.drawAction ?? DEFAULTS.drawAction)(ctx, spot, kind, failed, frame), ctx);
+}
+
+export function drawCompaction(ctx: Ctx, theme: Theme, spot: Point, frame: number): void {
+  safeDraw(theme, enginePlain(theme), th => (th.drawCompaction ?? DEFAULTS.drawCompaction)(ctx, spot, frame), ctx);
 }
 
 /**
@@ -97,7 +110,7 @@ export function drawCompaction(ctx: Ctx, theme: Theme, fallback: Theme, spot: Po
  * tool is playing; `now` (epoch ms) gives each its frame count since it arrived. Returns the drawn slots by sidekick id.
  */
 export function drawSidekicks(
-  ctx: Ctx, theme: Theme, fallback: Theme, spot: Point, sidekicks: readonly { id: string; since: number }[],
+  ctx: Ctx, theme: Theme, spot: Point, sidekicks: readonly { id: string; since: number }[],
   busyId: string | null, now: number, t: number,
 ): Map<string, Point> {
   const { points, more } = sidekickSlots(spot, sidekicks.length);
@@ -105,7 +118,7 @@ export function drawSidekicks(
   points.forEach((at, i) => {
     const s = sidekicks[i]!;
     const frame = Math.max(0, (now - s.since) / 1000) * CONFIG.client.animFps;
-    safeDraw(theme, fallback, th => (th.drawSidekick ?? DEFAULTS.drawSidekick)(ctx, at, Math.floor(frame), s.id === busyId, t), ctx);
+    safeDraw(theme, enginePlain(theme), th => (th.drawSidekick ?? DEFAULTS.drawSidekick)(ctx, at, Math.floor(frame), s.id === busyId, t), ctx);
     drawn.set(s.id, at);
   });
   const lastPt = points.at(-1);

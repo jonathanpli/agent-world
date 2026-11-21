@@ -67,8 +67,9 @@ export type Extras = { gauge: boolean; sidekicks: boolean; busySidekick: string 
 
 /**
  * Nothing until the actor has arrived at its work spot. Then the gauge (once there is a reading), the sidekicks, and
- * the compaction moment while `compacting`. An action owned by a drawn sidekick (one of the first SIDEKICKS_SHOWN)
- * only makes that sidekick busy; any other action plays at the spot. No action, and no busy sidekick, while it needs you.
+ * the compaction moment while `compacting`. Only the main agent's own action (no agent id) plays at the spot. One owned
+ * by a drawn sidekick (one of the first SIDEKICKS_SHOWN) only makes that sidekick busy; one owned by any other sidekick
+ * plays nowhere. No action, and no busy sidekick, while it needs you.
  */
 export function extrasFor(session: Session, arrived: boolean, action: ActiveAction | null, compacting: boolean): Extras {
   if (!arrived) return { gauge: false, sidekicks: false, busySidekick: null, action: null, compaction: false };
@@ -79,7 +80,7 @@ export function extrasFor(session: Session, arrived: boolean, action: ActiveActi
     gauge: session.context !== null,
     sidekicks: session.sidekicks.length > 0,
     busySidekick: owner?.id ?? null,
-    action: owner === undefined ? live : null,
+    action: live?.agentId == null ? live : null,
     compaction: compacting,
   };
 }

@@ -129,10 +129,10 @@ describe("extrasFor", () => {
     expect(extrasFor(busy, true, act("s2"), false)).toMatchObject({ sidekicks: true, busySidekick: "s2", action: null });
   });
 
-  test("an action whose agent id is not a drawn sidekick plays at the work spot", () => {
+  test("an action owned by a sidekick that is not drawn plays nowhere: never on the parent", () => {
     for (const id of ["s4", "gone"]) {
-      const a = act(id);                                  // s4 is past the three shown, under "+1"; "gone" is unknown
-      expect(extrasFor(busy, true, a, false)).toMatchObject({ busySidekick: null, action: a });
+      // s4 is past the three shown, under "+1"; "gone" is unknown
+      expect(extrasFor(busy, true, act(id), false)).toEqual({ gauge: true, sidekicks: true, busySidekick: null, action: null, compaction: false });
     }
   });
 
