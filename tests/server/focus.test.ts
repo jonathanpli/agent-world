@@ -192,19 +192,58 @@ test("cmux: no socket and no panel known → just select-workspace; no bundle id
   ]);
 });
 
-test("cmux: CLI missing on PATH → the app bundle found by bundle id is used", async () => {
-  const bundled = "/Volumes/Apps/cmux.app/Contents/Resources/bin/cmux";
-  const { run, calls } = recorder(file => {
-    if (file === "cmux") return { code: 127 };
-    if (file === "/usr/bin/mdfind") return { code: 0, stdout: "/Volumes/Apps/cmux.app\n" };
-    return { code: 0 };
-  });
+const SELECT = ["--socket", "/tmp/cmux.sock", "select-workspace", "--workspace", "ws_0a1b2c"];
+const IN_BUNDLE = "Contents/Resources/bin/cmux";
+const HOME_APPS = `${homedir()}/Applications`;
+
+test("cmux: CLI missing on PATH → the fixed install locations are tried first, before Spotlight is asked", async () => {
+  const bundled = `${HOME_APPS}/cmux.app/${IN_BUNDLE}`;
+  const { run, calls } = recorder(file => (file === "cmux" || file === `/Applications/cmux.app/${IN_BUNDLE}` ? { code: 127 } : { code: 0 }));
   expect(await focusTerminal(CMUX, "/repo", run, "darwin")).toEqual({ precision: "exact" });
   expect(pairs(calls)).toEqual([
-    ["cmux", ["--socket", "/tmp/cmux.sock", "select-workspace", "--workspace", "ws_0a1b2c"]],
-    ["/usr/bin/mdfind", ["kMDItemCFBundleIdentifier == 'com.cmuxterm.app'"]],
-    [bundled, ["--socket", "/tmp/cmux.sock", "select-workspace", "--workspace", "ws_0a1b2c"]],
+    ["cmux", SELECT],
+    [`/Applications/cmux.app/${IN_BUNDLE}`, SELECT],
+    [bundled, SELECT],
     [bundled, ["--socket", "/tmp/cmux.sock", "focus-panel", "--panel", "pn-6a7b8c", "--workspace", "ws_0a1b2c"]],
+    ["/usr/bin/open", ["-b", "com.cmuxterm.app"]],
+  ]);
+});
+
+test("cmux: a Spotlight hit directly under /Applications or ~/Applications is used, by its own app name", async () => {
+  for (const hit of ["/Applications/cmux NIGHTLY.app", `${HOME_APPS}/cmux NIGHTLY.app`]) {
+    const bundled = `${hit}/${IN_BUNDLE}`;
+    const { run, calls } = recorder(file => {
+      if (file === "/usr/bin/mdfind") return { code: 0, stdout: `${hit}\n` };
+      if (file === bundled || file === "/usr/bin/open") return { code: 0 };
+      return { code: 127 };
+    });
+    expect(await focusTerminal(CMUX, "/repo", run, "darwin")).toEqual({ precision: "exact" });
+    expect(pairs(calls).slice(0, 4)).toEqual([
+      ["cmux", SELECT],
+      [`/Applications/cmux.app/${IN_BUNDLE}`, SELECT],
+      [`${HOME_APPS}/cmux.app/${IN_BUNDLE}`, SELECT],
+      ["/usr/bin/mdfind", ["kMDItemCFBundleIdentifier == 'com.cmuxterm.app'"]],
+    ]);
+    expect(calls.some(c => c.file === bundled && c.args.includes("select-workspace"))).toBe(true);
+    expect(pairs(calls).at(-1)).toEqual(["/usr/bin/open", ["-b", "com.cmuxterm.app"]]);
+  }
+});
+
+test("cmux: a Spotlight hit anywhere else (Downloads, a mounted volume, a path with ..) is never executed", async () => {
+  const hits = [
+    `${homedir()}/Downloads/x.app`, "/Volumes/Evil/cmux.app", "/Volumes/Evil/Applications/cmux.app", "/Applications/../tmp/cmux.app",
+    "/Applications/sub/cmux.app", `${HOME_APPS}/../Downloads/y.app`, "/tmp/Applications/cmux.app", "relative/cmux.app", "/Applications/",
+    "/Applications/x/../evil.app",                                    // resolves under /Applications, but carries ..
+  ];
+  const { run, calls } = recorder(file => (file === "/usr/bin/mdfind" ? { code: 0, stdout: hits.join("\n") + "\n" } : file === "/usr/bin/open" ? { code: 0 } : { code: 127 }));
+  const r = await focusTerminal(CMUX, "/repo", run, "darwin");
+  expect(r?.precision).toBe("app");
+  // only the two fixed locations were run: no hit outside the two roots is accepted, nor its name
+  expect(pairs(calls)).toEqual([
+    ["cmux", SELECT],
+    [`/Applications/cmux.app/${IN_BUNDLE}`, SELECT],
+    [`${HOME_APPS}/cmux.app/${IN_BUNDLE}`, SELECT],
+    ["/usr/bin/mdfind", ["kMDItemCFBundleIdentifier == 'com.cmuxterm.app'"]],
     ["/usr/bin/open", ["-b", "com.cmuxterm.app"]],
   ]);
 });
@@ -220,10 +259,10 @@ test("cmux: CLI missing everywhere → the app is activated and the note says so
   expect(r?.note).toMatch(/cmux/);
   expect(r?.note).not.toContain("/tmp/cmux.sock");
   expect(pairs(calls)).toEqual([
-    ["cmux", ["--socket", "/tmp/cmux.sock", "select-workspace", "--workspace", "ws_0a1b2c"]],
+    ["cmux", SELECT],
+    [`/Applications/cmux.app/${IN_BUNDLE}`, SELECT],
+    [`${HOME_APPS}/cmux.app/${IN_BUNDLE}`, SELECT],
     ["/usr/bin/mdfind", ["kMDItemCFBundleIdentifier == 'com.cmuxterm.app'"]],
-    ["/Applications/cmux.app/Contents/Resources/bin/cmux", ["--socket", "/tmp/cmux.sock", "select-workspace", "--workspace", "ws_0a1b2c"]],
-    [`${homedir()}/Applications/cmux.app/Contents/Resources/bin/cmux`, ["--socket", "/tmp/cmux.sock", "select-workspace", "--workspace", "ws_0a1b2c"]],
     ["/usr/bin/open", ["-b", "com.cmuxterm.app"]],
   ]);
 });
@@ -231,8 +270,16 @@ test("cmux: CLI missing everywhere → the app is activated and the note says so
 test("cmux: the bundle is searched for the CLI only for cmux's own bundle ids (nightly included)", async () => {
   const { run, calls } = recorder(file => (file === "/usr/bin/open" ? { code: 0 } : file === "/usr/bin/mdfind" ? { code: 0, stdout: "" } : { code: 127 }));
   await focusTerminal({ ...CMUX, bundleId: "com.cmuxterm.app.nightly" }, "/repo", run, "darwin");
-  expect(pairs(calls)[1]).toEqual(["/usr/bin/mdfind", ["kMDItemCFBundleIdentifier == 'com.cmuxterm.app.nightly'"]]);
+  expect(pairs(calls)[3]).toEqual(["/usr/bin/mdfind", ["kMDItemCFBundleIdentifier == 'com.cmuxterm.app.nightly'"]]);
   expect(pairs(calls).at(-1)).toEqual(["/usr/bin/open", ["-b", "com.cmuxterm.app.nightly"]]);
+});
+
+test("cmux: a bundle id outside the full pattern never reaches the Spotlight query", async () => {
+  for (const bundleId of ["com.cmuxterm.app.x'y", "com.cmuxterm.app.a b", `com.cmuxterm.app.${"x".repeat(80)}`, "com.cmuxterm.app.\u00e9"]) {
+    const { run, calls } = recorder(file => (file === "/usr/bin/open" ? { code: 0 } : { code: 127 }));
+    await focusTerminal({ ...CMUX, bundleId }, "/repo", run, "darwin");
+    expect(calls.map(c => c.file)).not.toContain("/usr/bin/mdfind");
+  }
 });
 
 test("cmux ids under another app: cmux on PATH only; missing → that app is activated with a note", async () => {

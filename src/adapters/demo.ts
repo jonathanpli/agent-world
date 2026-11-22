@@ -77,12 +77,7 @@ export function createDemo(opts: { emit: (ev: AgentEvent) => void; rng: () => nu
   const sendTool = (s: Sim, t: DemoTool, agent?: Sidekick): void => {
     const detail: Record<string, string> = { tool: t.tool, summary: t.summary, toolKind: t.toolKind };
     if (agent) { detail.agentId = agent.id; detail.agentType = agent.type; }
-    const extra: Partial<AgentEvent> = rng() < cfg.toolFailChance ? { detail, failed: true } : { detail };
-    if (t.toolKind === "delegate" && !agent) {            // the Agent tool's own event carries the subagent's totals
-      extra.usage = { input: int(cfg.subagentInput), output: int(cfg.subagentOutput), cacheRead: int(cfg.subagentCacheRead), cacheWrite: int(cfg.subagentCacheWrite), cacheWrite1h: 0 };
-      extra.usageModel = cfg.subagentModel; extra.sidekick = true;
-    }
-    send(s, "tool", extra);
+    send(s, "tool", rng() < cfg.toolFailChance ? { detail, failed: true } : { detail });
   };
 
   function pickWeighted(xs: DemoMoment[]): DemoMoment {
@@ -132,11 +127,18 @@ export function createDemo(opts: { emit: (ev: AgentEvent) => void; rng: () => nu
     send(s, "sub_start", { detail: { agentId: k.id, agentType: k.type } });
   }
 
+  // like the server reading a finished subagent's own transcript: its tokens follow its sub_end as one sidekick usage event
+  function endSidekick(s: Sim, k: Sidekick): void {
+    send(s, "sub_end", { detail: { agentId: k.id, agentType: k.type } });
+    const usage: UsageDelta = { input: int(cfg.subagentInput), output: int(cfg.subagentOutput), cacheRead: int(cfg.subagentCacheRead), cacheWrite: int(cfg.subagentCacheWrite), cacheWrite1h: 0 };
+    send(s, "usage", { usage, usageModel: cfg.subagentModel, sidekick: true });
+  }
+
   function stepSidekicks(s: Sim, t: number): void {
     for (const k of [...s.sidekicks]) {
       if (k.nextAt > t) continue;
       if (k.toolsLeft-- > 0) { sendTool(s, pick(SIDEKICK_TOOLS), k); k.nextAt = t + between(cfg.sidekickGapMs); continue; }
-      send(s, "sub_end", { detail: { agentId: k.id, agentType: k.type } });
+      endSidekick(s, k);
       s.sidekicks.splice(s.sidekicks.indexOf(k), 1);
     }
   }
@@ -183,7 +185,7 @@ export function createDemo(opts: { emit: (ev: AgentEvent) => void; rng: () => nu
         s.phase = "prompt"; advance(s, t);
         break;
       case "end":
-        for (const k of s.sidekicks) send(s, "sub_end", { detail: { agentId: k.id, agentType: k.type } });
+        for (const k of s.sidekicks) endSidekick(s, k);
         send(s, "session_end");
         sims.splice(sims.indexOf(s), 1);
         spawnAt.push(t + rng() * cfg.respawnMaxMs);

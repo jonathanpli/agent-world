@@ -68,6 +68,22 @@ test("sidechain, placeholder-model, model-less, id-less, zero-usage and non-assi
   expect(r.cursor.ids).toEqual(["ok"]);
 });
 
+test("sidechain entries are counted only with the sidechain option (a subagent's own transcript)", async () => {
+  const sub = JSON.stringify({
+    type: "assistant", isSidechain: true, agentId: "a5b204f6cefc0d539",
+    message: { id: "msg_01xyz", model: "claude-haiku-5-5", usage: {
+      input_tokens: 2, cache_creation_input_tokens: 4890, cache_read_input_tokens: 30058, output_tokens: 145,
+      cache_creation: { ephemeral_5m_input_tokens: 4890, ephemeral_1h_input_tokens: 0 },
+    } },
+  }) + "\n";
+  const p = file(sub);
+  expect((await readUsage(p, at(0))).batches).toEqual([]);
+  expect((await readUsage(p, at(0), { sidechain: false })).batches).toEqual([]);
+  const r = await readUsage(p, at(0), { sidechain: true });
+  expect(r.batches).toEqual([{ model: "claude-haiku-5-5", longPrompt: false, usage: { input: 2, output: 145, cacheRead: 30058, cacheWrite: 4890, cacheWrite1h: 0 } }]);
+  expect(r.cursor).toEqual(at(size(p), ["msg_01xyz"]));
+});
+
 test("a partial last line is left for the next read and counted once it is complete", async () => {
   const whole = line({ id: "a", output: 4 });
   const p = file(whole + line({ id: "b", output: 6 }).slice(0, 30));
@@ -150,6 +166,15 @@ test("non-numeric or negative usage numbers count as 0", async () => {
     usage: { input_tokens: "5", output_tokens: -3, cache_read_input_tokens: 4, cache_creation_input_tokens: null, cache_creation: { ephemeral_1h_input_tokens: "x" } } } }) + "\n");
   const r = await readUsage(p, at(0));
   expect(r.batches[0]!.usage).toEqual({ input: 0, output: 0, cacheRead: 4, cacheWrite: 0, cacheWrite1h: 0 });
+});
+
+test("only whole, safe, positive token counts count: 1.5, 1e308, -3 and NaN are 0", async () => {
+  // JSON cannot spell NaN; a huge exponent parses to Infinity and 1e308 is finite but not a safe integer
+  const usage = '{"input_tokens":1.5,"output_tokens":1e308,"cache_read_input_tokens":-3,"cache_creation_input_tokens":1e999,"cache_creation":{"ephemeral_1h_input_tokens":2.5}}';
+  const p = file(`{"type":"assistant","message":{"id":"a","model":"claude-opus-5-5","usage":${usage}}}\n` + line({ id: "b", input: 1, output: 0 }));
+  const r = await readUsage(p, at(0));
+  expect(r.batches).toEqual([{ model: "claude-opus-5-5", longPrompt: false, usage: { input: 1, output: 0, cacheRead: 0, cacheWrite: 0, cacheWrite1h: 0 } }]);
+  expect(r.cursor.ids).toEqual(["b"]);              // "a" has no countable tokens left
 });
 
 test("a directory or a missing path leaves the cursor unchanged and counts nothing", async () => {

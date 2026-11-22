@@ -8,14 +8,17 @@ export type UsageCursor = { offset: number; ids: string[] };
 export type UsageBatch = { model: string; longPrompt: boolean; usage: UsageDelta };
 
 const isRecord = (v: unknown): v is Record<string, unknown> => typeof v === "object" && v !== null && !Array.isArray(v);
-/** Non-numeric or negative → 0. */
-const count = (v: unknown): number => (typeof v === "number" && Number.isFinite(v) && v > 0 ? v : 0);
+/** A whole, safe, positive token count; anything else (fractions, huge, negative, non-numeric) → 0. */
+const count = (v: unknown): number => (typeof v === "number" && Number.isSafeInteger(v) && v > 0 ? v : 0);
 /** Placeholders such as "<synthetic>" are not real model ids. */
 const realModel = (m: unknown): m is string => typeof m === "string" && m !== "" && !m.startsWith("<");
 
+/** How to read: `sidechain` counts entries marked `isSidechain` too (a subagent's own transcript); by default they are skipped. */
+export type UsageReadOptions = { sidechain?: boolean };
+
 /** The counted message an entry is, or null when it is not one (cacheWrite1h from the breakdown; cacheWrite the rest). */
-function asMessage(entry: unknown): { id: string; model: string; usage: UsageDelta; prompt: number } | null {
-  if (!isRecord(entry) || entry.type !== "assistant" || entry.isSidechain === true || !isRecord(entry.message)) return null;
+function asMessage(entry: unknown, sidechain: boolean): { id: string; model: string; usage: UsageDelta; prompt: number } | null {
+  if (!isRecord(entry) || entry.type !== "assistant" || (entry.isSidechain === true && !sidechain) || !isRecord(entry.message)) return null;
   const { id, model, usage: u } = entry.message;
   if (typeof id !== "string" || !realModel(model) || !isRecord(u)) return null;
   const created = count(u.cache_creation_input_tokens);
@@ -31,11 +34,11 @@ function asMessage(entry: unknown): { id: string; model: string; usage: UsageDel
 /**
  * One incremental read of a Claude Code transcript for token usage. `null` is first sight: the cursor is set to the end
  * of the file (to 0 when there is no file yet) and nothing is counted. Otherwise complete lines from the offset are read,
- * at most CONFIG.usage.readMaxBytes, and each main-thread assistant message with a real model, a string id not counted
- * before and non-zero usage is counted once; a file shorter than the offset moves the offset to its size. A single line
+ * at most CONFIG.usage.readMaxBytes, and each main-thread assistant message (any assistant message with `sidechain`) with
+ * a real model, a string id not counted before and non-zero usage is counted once; a file shorter than the offset moves the offset to its size. A single line
  * longer than the cap is skipped. Anything unreadable leaves the cursor as it was. Never rejects.
  */
-export async function readUsage(path: string, cursor: UsageCursor | null): Promise<{ cursor: UsageCursor; batches: UsageBatch[] }> {
+export async function readUsage(path: string, cursor: UsageCursor | null, opts: UsageReadOptions = {}): Promise<{ cursor: UsageCursor; batches: UsageBatch[] }> {
   const unchanged = { cursor: cursor ?? { offset: 0, ids: [] }, batches: [] };
   try {
     if (!(await stat(path)).isFile()) return unchanged;   // a directory or FIFO would fail or block forever
@@ -59,7 +62,7 @@ export async function readUsage(path: string, cursor: UsageCursor | null): Promi
       for (const raw of buf.subarray(0, end).toString("utf8").split("\n")) {
         let entry: unknown;
         try { entry = JSON.parse(raw); } catch { continue; }
-        const m = asMessage(entry);
+        const m = asMessage(entry, opts.sidechain === true);
         if (m === null || seen.has(m.id)) continue;
         seen.add(m.id); ids.push(m.id);
         const longPrompt = m.prompt > CONFIG.usage.longPromptTokens;

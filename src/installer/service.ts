@@ -1,4 +1,4 @@
-import { dirname, join } from "node:path";
+import { dirname, join, resolve } from "node:path";
 import { buildPlist, parsePrint, readPlistInfo, SERVICE_LABEL } from "./launchd";
 import { serverEnv } from "../server/env";
 import { nodeVersionProblem } from "../server/nodeVersion";
@@ -12,6 +12,8 @@ export type ServiceDeps = {
   repoDir: string;
   agentsDir: string;
   homeDir: string;
+  /** The folder the installer runs in: a relative AGENT_WORLD_HOME is taken from here. */
+  cwd: string;
   uid: number;
   env: Record<string, string | undefined>;
   run: (file: string, args: string[]) => Promise<RunResult>;
@@ -57,7 +59,9 @@ export async function runService(argv: string[], deps: ServiceDeps): Promise<num
   const { agentsDir, dryRun } = args;
   const plistPath = join(agentsDir, `${SERVICE_LABEL}.plist`);
   const target = `gui/${deps.uid}/${SERVICE_LABEL}`;
-  const { port, home } = serverEnv(deps.env, false, deps.homeDir);
+  const { port, home: rawHome } = serverEnv(deps.env, false, deps.homeDir);
+  // launchd starts the server in another folder: a relative home would point somewhere else there
+  const home = resolve(deps.cwd, rawHome);
   const logPath = join(home, "server.log");
 
   if (args.command === "status") return status(deps, plistPath, target, port, logPath);
@@ -77,10 +81,9 @@ export async function runService(argv: string[], deps: ServiceDeps): Promise<num
   const tsxCli = join(deps.repoDir, "node_modules", "tsx", "dist", "cli.mjs");
   if (!deps.exists(tsxCli)) { deps.log(`${tsxCli} is missing. Run \`npm install\` in ${deps.repoDir} first.`); return 1; }
   const env: Record<string, string> = { PATH: deps.env.PATH?.trim() ? deps.env.PATH : DEFAULT_PATH };
-  for (const k of ["AGENT_WORLD_PORT", "AGENT_WORLD_HOME"]) {
-    const v = deps.env[k];
-    if (v !== undefined && v.trim() !== "") env[k] = v;
-  }
+  const set = (v: string | undefined): v is string => v !== undefined && v.trim() !== "";
+  if (set(deps.env.AGENT_WORLD_PORT)) env.AGENT_WORLD_PORT = deps.env.AGENT_WORLD_PORT;
+  if (set(deps.env.AGENT_WORLD_HOME)) env.AGENT_WORLD_HOME = home;   // absolute, as the log path
   const plist = buildPlist({ nodePath: deps.execPath, tsxCli, repoDir: deps.repoDir, logPath, env });
   const build = ["--prefix", deps.repoDir, "run", "build"];
   const bootout = ["bootout", target];
@@ -97,14 +100,16 @@ export async function runService(argv: string[], deps: ServiceDeps): Promise<num
   }
 
   // An older copy holds the port itself (KeepAlive), so it has to be stopped before the port can be judged.
+  // Only a service launchd has loaded can be holding the port; a plist left behind with nothing loaded holds nothing.
   const printed = await deps.run("launchctl", ["print", target]);
-  const older = deps.exists(plistPath) || printed.status === 0;
-  if (!older && (await deps.portInUse(port))) { deps.log(portBusy(port, false)); return 1; }
+  const loadedBefore = printed.status === 0;
+  const older = deps.exists(plistPath) || loadedBefore;
+  if (!loadedBefore && (await deps.portInUse(port))) { deps.log(portBusy(port, false)); return 1; }
 
   const built = await deps.run("npm", build);
   if (built.status !== 0) { deps.log(`npm run build failed:\n${built.stderr || built.stdout}`); return 1; }
   await deps.run("launchctl", bootout); // fails harmlessly when nothing is loaded
-  if (older && !(await portFree(deps, port))) { deps.log(portBusy(port, true)); return 1; }
+  if (older && !(await portFree(deps, port))) { deps.log(portBusy(port, loadedBefore)); return 1; }
   deps.mkdir(agentsDir);
   deps.mkdir(dirname(logPath)); // launchd cannot open a log file in a missing folder
   deps.writeFile(plistPath, plist, 0o644);

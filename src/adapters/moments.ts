@@ -1,6 +1,8 @@
 import type { MomentKind } from "../shared/types";
 
-const SEPARATORS = ["&&", "||", ";", "|", "\n"];
+const SEPARATORS = ["&&", "||", ";", "|", "&", "\n"];
+/** A lone `&` (background) separates commands; inside a redirection (`2>&1`, `>&2`, `&>file`) it does not. */
+const inRedirect = (command: string, i: number): boolean => command[i - 1] === ">" || command[i - 1] === "<" || command[i + 1] === ">";
 
 /** Splits a shell command into simple commands, each a list of words with quotes removed. Quoted text stays inside one word; heredoc bodies are dropped. */
 function simpleCommands(command: string): string[][] {
@@ -61,7 +63,7 @@ function simpleCommands(command: string): string[][] {
       }
       heredocs = [];
     } else {
-      const sep = SEPARATORS.find((s) => command.startsWith(s, i));
+      const sep = SEPARATORS.find((s) => command.startsWith(s, i) && !(s === "&" && inRedirect(command, i)));
       if (sep !== undefined) { endCommand(); i += sep.length; }
       else if (c === " " || c === "\t" || c === "\r") { endWord(); i++; }
       else { word = (word ?? "") + c; i++; }
@@ -116,9 +118,11 @@ function matchOne(w: string[]): Exclude<MomentKind, "tests_failed"> | null {
   if (program === "git") {
     const g = gitSubcommand(w);
     if (g === null || g.rest.includes("--dry-run")) return null;
-    return g.sub === "commit" ? "commit" : g.sub === "push" ? "push" : null;
+    if (g.sub === "commit") return "commit";                 // for commit, -n is --no-verify: it still commits
+    return g.sub === "push" && !g.rest.includes("-n") ? "push" : null;
   }
-  if (program === "gh" && w[1] === "pr") return w[2] === "create" ? "pr_opened" : w[2] === "merge" ? "pr_merged" : null;
+  // `gh pr merge --auto` only queues the merge for when checks pass: not a merge yet
+  if (program === "gh" && w[1] === "pr") return w[2] === "create" ? "pr_opened" : w[2] === "merge" && !w.includes("--auto") ? "pr_merged" : null;
   return isTestRunner(w) ? "tests_passed" : null;
 }
 

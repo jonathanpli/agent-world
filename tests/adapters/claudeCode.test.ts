@@ -36,7 +36,7 @@ describe("claudeCode adapter", () => {
   test("Stop carries the last message", () => { expect(claudeCode.parse({ ...fx("Stop"), last_assistant_message: "Done." }, 0)[0]).toMatchObject({ kind: "task_done", effort: "medium", detail: { summary: "Done." } }); expect(claudeCode.parse({ ...fx("Stop"), last_assistant_message: "z".repeat(900) }, 0)[0].detail!.summary).toHaveLength(500); });
   test("PostModelSwitch", () => { expect(claudeCode.parse({ ...fx("PostModelSwitch.synthetic"), to_model: "claude-haiku-5-5" }, 0)[0]).toMatchObject({ kind: "model_change", model: "claude-haiku-5-5", tier: 1 }); });
   test("SessionEnd", () => { expect(claudeCode.parse(fx("SessionEnd"), 0)[0].kind).toBe("session_end"); });
-  test("git moments and subagent token totals", () => {
+  test("git moments", () => {
     const bash = (command: string, stdout?: string) => claudeCode.parse({ ...fx("PostToolUse"), tool_input: { command }, tool_response: { stdout } }, 0)[0];
     const commit = bash('git commit -m "fix"', "[main 1a2b3c4] fix\n 1 file changed");
     expect(commit.moment).toBe("commit");
@@ -46,19 +46,17 @@ describe("claudeCode adapter", () => {
     const failed = claudeCode.parse({ ...fx("PostToolUseFailure.bash"), tool_input: { command: "npm test" } }, 0)[0];
     expect(failed).toMatchObject({ moment: "tests_failed", failed: true });
     expect(claudeCode.parse({ ...fx("PostToolUse"), tool_name: "Edit", tool_input: { command: "git commit -m x" } }, 0)[0].moment).toBeUndefined();
-    const agent = claudeCode.parse(fx("PostToolUse.agentTool"), 0)[0];
-    expect(agent).toMatchObject({ usage: { input: 2, output: 145, cacheRead: 30058, cacheWrite: 4890, cacheWrite1h: 0 }, usageModel: "claude-haiku-5-5", sidekick: true });
-    const { usage, ...noUsage } = fx("PostToolUse.agentTool").tool_response;
-    const bare = claudeCode.parse({ ...fx("PostToolUse.agentTool"), tool_response: noUsage }, 0)[0];
-    expect(bare.usage).toBeUndefined(); expect(bare.usageModel).toBeUndefined(); expect(bare.sidekick).toBeUndefined();
   });
-  test("Agent usage: cache writes split into disjoint 5m and 1h parts", () => {
-    const withUsage = (usage: Record<string, unknown>) => claudeCode.parse({ ...fx("PostToolUse.agentTool"), tool_response: { resolvedModel: "m", usage } }, 0)[0].usage;
-    expect(withUsage({ cache_creation_input_tokens: 1000, cache_creation: { ephemeral_5m_input_tokens: 400, ephemeral_1h_input_tokens: 600 } })).toMatchObject({ cacheWrite: 400, cacheWrite1h: 600 });
-    expect(withUsage({ cache_creation_input_tokens: 1000 })).toMatchObject({ cacheWrite: 1000, cacheWrite1h: 0 });
-    expect(withUsage({ cache_creation_input_tokens: 1000, cache_creation: { ephemeral_5m_input_tokens: 1, ephemeral_1h_input_tokens: 600 } })).toMatchObject({ cacheWrite: 400, cacheWrite1h: 600 });
-    expect(withUsage({ cache_creation_input_tokens: 100, cache_creation: { ephemeral_1h_input_tokens: 600 } })).toMatchObject({ cacheWrite: 0, cacheWrite1h: 600 });
-    expect(withUsage({ input_tokens: "x", output_tokens: -5, cache_creation_input_tokens: -1 })).toEqual({ input: 0, output: 0, cacheRead: 0, cacheWrite: 0, cacheWrite1h: 0 });
+  test("the Agent tool event carries no usage: a subagent's tokens come from its own transcript at SubagentStop", () => {
+    const agent = claudeCode.parse(fx("PostToolUse.agentTool"), 0)[0];
+    expect(fx("PostToolUse.agentTool").tool_response.usage).toBeDefined();          // the payload has it; it is only the last request
+    expect(agent.kind).toBe("tool");
+    expect(agent.usage).toBeUndefined(); expect(agent.usageModel).toBeUndefined(); expect(agent.sidekick).toBeUndefined();
+    const task = claudeCode.parse({ ...fx("PostToolUse.agentTool"), tool_name: "Task" }, 0)[0];
+    expect(task.usage).toBeUndefined();
+    const stop = claudeCode.parse(fx("SubagentStop"), 0)[0];
+    expect(stop.usage).toBeUndefined();
+    expect(JSON.stringify(stop)).not.toContain(fx("SubagentStop").agent_transcript_path);   // the path stays in the server
   });
   test("junk never throws", () => { for (const j of [null, 1, "x", [], {}, { hook_event_name: "Stop" }, { hook_event_name: "Nope", session_id: "s", cwd: "/" }]) expect(claudeCode.parse(j, 0)).toEqual([]); });
   test("tierForModel: an unrecognised id is the default tier; missing, empty and placeholders stay unknown", () => {

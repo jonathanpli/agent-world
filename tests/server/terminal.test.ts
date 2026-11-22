@@ -56,6 +56,10 @@ test("patterns at their edges", () => {
 test("a repeated header (an array) is ignored", () => {
   expect(terminalFromHeaders({ ...VALID, "x-aw-tty": ["ttys001", "ttys002"] })).toEqual({ ...FULL, tty: undefined });
   expect(terminalFromHeaders({ "x-aw-tty": ["ttys001"] })).toBeNull();
+  // Node joins most repeated headers into one comma-separated string: that never matches a pattern either
+  expect(terminalFromHeaders({ ...VALID, "x-aw-tty": "ttys001, ttys002" })).toEqual({ ...FULL, tty: undefined });
+  expect(terminalFromHeaders({ "x-aw-tty": "ttys001, ttys002" })).toBeNull();
+  expect(terminalFromHeaders({ "x-aw-bundle-id": "com.apple.Terminal, com.googlecode.iterm2" })).toBeNull();
 });
 
 test("nothing valid gives null", () => {

@@ -27,7 +27,7 @@ const plist = (): string => join(agents, "com.agent-world.server.plist");
 function deps(over: Partial<ServiceDeps> = {}): ServiceDeps {
   return {
     platform: "darwin", nodeVersion: "v22.13.0", execPath: process.execPath, repoDir: join(dir, "repo"), agentsDir: agents,
-    homeDir: join(dir, "home"), uid: 501, env: {},
+    homeDir: join(dir, "home"), cwd: join(dir, "cwd"), uid: 501, env: {},
     run: async (file, args) => {
       calls.push([file, ...args].join(" "));
       if (file === "npm") return { status: buildStatus, stdout: "", stderr: "" };
@@ -233,4 +233,32 @@ test("bootstrap failing five times exits 1 and shows launchctl's error", async (
   expect(await runService(["install"], deps())).toBe(1);
   expect(calls.filter(c => c.includes("bootstrap"))).toHaveLength(5);
   expect(text()).toContain("Input/output error");
+});
+
+test("a relative AGENT_WORLD_HOME is made absolute (from the installer's folder) before it goes into the plist and the log path", async () => {
+  expect(await runService(["install"], deps({ env: { AGENT_WORLD_HOME: "rel/aw" } }))).toBe(0);
+  const abs = join(dir, "cwd", "rel", "aw");
+  const p = readFileSync(plist(), "utf8");
+  expect(p).toMatch(new RegExp(`<key>AGENT_WORLD_HOME</key>\\s*<string>${abs}</string>`));
+  expect(p).toContain(`<string>${join(abs, "server.log")}</string>`);
+  expect(p).not.toMatch(/<string>rel\//);
+  expect(existsSync(abs)).toBe(true);                       // the log folder was made there
+  expect(text()).toContain(`Log: ${join(abs, "server.log")}`);
+  out = [];
+  await runService(["status"], deps({ env: { AGENT_WORLD_HOME: "rel/aw" } }));
+  expect(text()).toContain(`log: ${join(abs, "server.log")}`);
+});
+
+test("a stale plist with no service loaded and the port busy: refused without claiming an older service was stopped", async () => {
+  await runService(["install"], deps());
+  const before = readFileSync(plist(), "utf8");
+  loaded = false;                                           // launchd no longer knows it (e.g. after a manual bootout)
+  portBusy = true;
+  calls = []; out = [];
+  expect(await runService(["install"], deps())).toBe(1);
+  expect(text()).not.toMatch(/stopped/i);
+  expect(text()).toContain("4317");
+  expect(text()).toContain("nothing was changed");
+  expect(calls).toEqual(["launchctl print gui/501/com.agent-world.server"]);   // no build, no bootout, no bootstrap
+  expect(readFileSync(plist(), "utf8")).toBe(before);
 });

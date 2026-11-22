@@ -64,7 +64,7 @@ test("demo simulates token usage, subagent totals and git moments", () => {
   const demo = createDemo({ rng: mulberry32(7), now: () => t, emit: e => { if (e.model) models.set(e.sessionId, e.model); evs.push(e); } });
   for (let i = 0; i < 900; i++) { t = i * 1000; demo.step(); }
 
-  const usages = evs.filter(e => e.kind === "usage");
+  const usages = evs.filter(e => e.kind === "usage" && !e.sidekick);
   expect(usages.length).toBeGreaterThan(20);
   for (const e of usages) {
     const u = e.usage!;
@@ -75,9 +75,19 @@ test("demo simulates token usage, subagent totals and git moments", () => {
   }
   expect(usages.some(e => e.usageModel === models.get(e.sessionId))).toBe(true);
 
+  // the Agent tool's own event carries no tokens; each subagent's arrive as a sidekick usage event right after its sub_end
   const delegates = evs.filter(e => e.kind === "tool" && e.detail?.toolKind === "delegate" && !e.detail.agentId);
   expect(delegates.length).toBeGreaterThan(0);
-  for (const e of delegates) { expect(e.sidekick).toBe(true); expect(e.usage!.output).toBeGreaterThan(0); expect(e.usageModel).toBe("claude-haiku-5-5"); }
+  for (const e of delegates) { expect(e.usage).toBeUndefined(); expect(e.sidekick).toBeUndefined(); }
+  expect(evs.filter(e => e.kind === "tool").every(e => e.usage === undefined)).toBe(true);
+  const ends = evs.flatMap((e, i) => (e.kind === "sub_end" ? [i] : []));
+  expect(ends.length).toBeGreaterThan(0);
+  for (const i of ends) {
+    const after = evs[i + 1]!;
+    expect(after).toMatchObject({ kind: "usage", sidekick: true, usageModel: "claude-haiku-5-5", sessionId: evs[i]!.sessionId });
+    expect(after.usage!.output).toBeGreaterThan(0);
+  }
+  expect(evs.filter(e => e.kind === "usage" && e.sidekick).length).toBe(ends.length);
 
   const tools = evs.filter(e => e.kind === "tool");
   const moments = tools.filter(e => e.moment);

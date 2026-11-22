@@ -1,5 +1,6 @@
 import { execFile, type ExecFileException } from "node:child_process";
 import { homedir } from "node:os";
+import { basename, dirname, resolve } from "node:path";
 import type { FocusResult } from "../shared/types";
 import type { TerminalInfo } from "./terminal";
 
@@ -53,7 +54,7 @@ function call(ctx: Ctx, file: string, args: string[]): Promise<Result> {
 }
 
 // macOS programs live at fixed paths, so a launchd PATH cannot hide them; tmux and cmux are the owner's installs and are
-// found on PATH (cmux also inside its own app bundle).
+// found on PATH (cmux also inside its own app bundle, in /Applications or ~/Applications only).
 const OSASCRIPT = "/usr/bin/osascript";
 const OPEN = "/usr/bin/open";
 const MDFIND = "/usr/bin/mdfind";
@@ -79,6 +80,8 @@ function itermUuid(id: string | undefined): string | null {
   const u = id.slice(id.lastIndexOf(":") + 1);
   return UUID.test(u) ? u : null;
 }
+/** The full bundle id pattern, checked again here before an id is placed in the Spotlight query. */
+const BUNDLE_ID = /^[A-Za-z0-9][A-Za-z0-9.-]{0,79}$/;
 /** cmux's own bundle ids: the release build and its variants (nightly, debug). Only these are searched for the CLI. */
 const isCmuxBundle = (id: string): boolean => id === CMUX_ID || id.startsWith(`${CMUX_ID}.`);
 
@@ -154,17 +157,53 @@ async function scripted(ctx: Ctx, script: string[], arg: string, bundleId: strin
   return { precision: "app", note: (await activate(ctx, bundleId, app)) ?? note };
 }
 
+/** The only folders an app bundle is run from: /Applications and the owner's ~/Applications. */
+const appRoots = (): string[] => ["/Applications", resolve(homedir(), "Applications")];
+const inBundle = (bundle: string): string => `${bundle}/${CMUX_IN_BUNDLE}`;
+
 /**
- * Where the cmux CLI may be, after PATH: inside each app bundle Spotlight knows by `bundleId`, then the usual install
- * locations. Only called for cmux's own bundle ids (`isCmuxBundle`). The query is safe to build from `bundleId`: it is
- * `com.cmuxterm.app` or that plus letters, digits, '.' and '-' (the stored pattern), so it cannot close the quotes or add a
- * clause, and it is one argument to `mdfind` run without a shell.
+ * The app names Spotlight knows for `bundleId`, kept only for a hit that is an absolute path with no `..` whose bundle sits
+ * directly in one of the app roots; anything else (Downloads, a mounted volume, a nested folder) is dropped unseen. The
+ * query is built only from an id matching the full pattern, so it cannot close the quotes or add a clause, and it is one
+ * argument to `mdfind` run without a shell.
  */
-async function cmuxCandidates(ctx: Ctx, bundleId: string): Promise<string[]> {
+async function spotlightAppNames(ctx: Ctx, bundleId: string): Promise<string[]> {
+  if (!BUNDLE_ID.test(bundleId)) return [];
   const r = await call(ctx, MDFIND, [`kMDItemCFBundleIdentifier == '${bundleId}'`]);
-  const found = r.code === 0 ? r.stdout.split("\n").map(l => l.trim()).filter(l => l.startsWith("/") && l.endsWith(".app")) : [];
-  const bundles = [...found, "/Applications/cmux.app", `${homedir()}/Applications/cmux.app`];
-  return [...new Set(bundles.map(b => `${b}/${CMUX_IN_BUNDLE}`))];
+  if (r.code !== 0) return [];
+  const roots = appRoots();
+  const names: string[] = [];
+  for (const line of r.stdout.split("\n")) {
+    const hit = line.trim();
+    if (!hit.startsWith("/") || hit.split("/").includes("..")) continue;
+    const bundle = resolve(hit);
+    const name = basename(bundle);
+    if (!roots.includes(dirname(bundle)) || !name.endsWith(".app") || name.startsWith(".")) continue;
+    names.push(name);
+  }
+  return names;
+}
+
+/**
+ * Finds the cmux CLI when it is not on PATH: inside cmux.app in each app root first, then inside each app Spotlight names
+ * for `bundleId` (in the same two roots only). Returns the result of the first one that is there. Only called for cmux's
+ * own bundle ids (`isCmuxBundle`).
+ */
+async function cmuxFromBundle(ctx: Ctx, bundleId: string, args: string[]): Promise<{ r: Result; cli: string } | null> {
+  const tried = new Set<string>();
+  const attempt = async (names: string[]): Promise<{ r: Result; cli: string } | null> => {
+    for (const name of names) {
+      for (const root of appRoots()) {
+        const cli = inBundle(`${root}/${name}`);
+        if (tried.has(cli)) continue;
+        tried.add(cli);
+        const r = await call(ctx, cli, args);
+        if (r.code !== NOT_FOUND) return { r, cli };
+      }
+    }
+    return null;
+  };
+  return (await attempt(["cmux.app"])) ?? (await attempt(await spotlightAppNames(ctx, bundleId)));
 }
 
 /** cmux: select the workspace (and panel) through its CLI, then activate the app, which socket commands never do. */
@@ -177,11 +216,8 @@ async function focusCmux(t: TerminalInfo & { cmuxWorkspace: string }, ctx: Ctx):
   let r = await call(ctx, "cmux", select);
   let cli = "cmux";
   if (r.code === NOT_FOUND && ownBundle) {
-    for (const candidate of await cmuxCandidates(ctx, bundleId)) {
-      r = await call(ctx, candidate, select);
-      cli = candidate;
-      if (r.code !== NOT_FOUND) break;
-    }
+    const found = await cmuxFromBundle(ctx, bundleId, select);
+    if (found !== null) ({ r, cli } = found);
   }
   const selected = r.code === 0;
   const panel = selected && t.cmuxPanel !== undefined

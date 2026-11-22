@@ -36,6 +36,7 @@ const code = await runService(process.argv.slice(2), {
   repoDir: resolve(dirname(fileURLToPath(import.meta.url)), ".."),
   agentsDir: join(homedir(), "Library", "LaunchAgents"),
   homeDir: homedir(),
+  cwd: process.cwd(),
   uid: process.getuid?.() ?? 0,
   env: process.env,
   run,

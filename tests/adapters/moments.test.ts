@@ -52,6 +52,25 @@ const table: [string, boolean, MomentKind | null][] = [
   ["echo a#b && git commit -m x", false, "commit"],
   ['git commit -m "fix #12"', false, "commit"],
   ["echo hi # note\ngit commit -m x", false, "commit"],
+  // a single & runs the command before it in the background and starts the next one
+  ['echo "git" & git commit -m x', false, "commit"],
+  ["npm run dev & npm test", false, "tests_passed"],
+  ["sleep 1 & git push", false, "push"],
+  ["echo git & echo commit", false, null],
+  ["echo a&git push origin main", false, "push"],
+  // & inside a redirection is not a separator
+  ["npm test 2>&1 | tee out.log", false, "tests_passed"],
+  ["git commit -m x >/dev/null 2>&1", false, "commit"],
+  ["npm test &> out.log", false, "tests_passed"],
+  // git push -n is a dry run; for commit, -n is --no-verify and still commits
+  ["git push -n", false, null],
+  ["git push -n origin main", false, null],
+  ["git push origin main -n", false, null],
+  ["git commit -n -m x", false, "commit"],
+  // gh pr merge --auto only queues the merge
+  ["gh pr merge --auto --squash", false, null],
+  ["gh pr merge 12 --squash --auto", false, null],
+  ["gh pr merge 12 --auto && git push", false, "push"],
 ];
 
 describe("momentFor", () => {

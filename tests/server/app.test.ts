@@ -3,6 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createServer, request, type IncomingMessage, type Server, type ServerResponse } from "node:http";
 import type { AddressInfo } from "node:net";
+import { DatabaseSync } from "node:sqlite";
 import { Readable } from "node:stream";
 import { afterEach, expect, test, vi } from "vitest";
 import { createApp, type App, type AppOptions } from "../../src/server/app";
@@ -13,6 +14,19 @@ import type { TranscriptInfo } from "../../src/server/transcript";
 import type { readUsage, UsageBatch, UsageCursor } from "../../src/server/usageReader";
 import { CONFIG } from "../../src/shared/config";
 import type { AgentEvent, Delta, Snapshot } from "../../src/shared/types";
+
+/** Every event the app applies to its world, in order: the world itself is unchanged (a pass-through wrapper). */
+const applied = vi.hoisted(() => [] as AgentEvent[]);
+vi.mock("../../src/core/world", async importOriginal => {
+  const m = await importOriginal<typeof import("../../src/core/world")>();
+  return {
+    ...m,
+    createWorld: (...args: Parameters<typeof m.createWorld>) => {
+      const w = m.createWorld(...args);
+      return { ...w, apply: (e: AgentEvent) => { applied.push(structuredClone(e)); return w.apply(e); } };
+    },
+  };
+});
 
 /** A transcript reader that knows only the model, as the model-fallback tests need. */
 const byModel = (read: (path: string) => Promise<string | null>) => async (path: string): Promise<TranscriptInfo> =>
@@ -54,8 +68,10 @@ afterEach(async () => {
 
 const ingest = (base: string, body: string, source = "claude-code") => fetch(`${base}/ingest/${source}`, { method: "POST", body });
 const snapshot = async (base: string): Promise<Snapshot> => (await fetch(`${base}/api/snapshot`)).json() as Promise<Snapshot>;
-const send = (base: string, method: string, path: string, body?: unknown) =>
-  fetch(`${base}${path}`, { method, headers: { "content-type": "application/json" }, body: body === undefined ? undefined : JSON.stringify(body) });
+/** The browser's own header on every API write; without it a write is refused (see the write-header test). */
+const WRITE = { "x-agent-world": "1" };
+const send = (base: string, method: string, path: string, body?: unknown, headers: Record<string, string> = WRITE) =>
+  fetch(`${base}${path}`, { method, headers: { "content-type": "application/json", ...headers }, body: body === undefined ? undefined : JSON.stringify(body) });
 
 /** Opens /events and returns a function that resolves with the next SSE message. */
 async function openStream(base: string): Promise<() => Promise<{ event: string; data: unknown }>> {
@@ -378,9 +394,49 @@ test("a foreign browser Origin is refused on writes, and its ingest is discarded
   const id = s.characters[0]!.id;
   expect((await raw(base, "PATCH", `/api/characters/${id}`, evil, JSON.stringify({ name: "Pwned" }))).status).toBe(403);
   expect((await snapshot(base)).characters[0]!.name).not.toBe("Pwned");
-  const local = await raw(base, "PUT", "/api/settings", { origin: "http://localhost:5173", "content-type": "application/json" }, JSON.stringify({ theme: "space" }));
+  const local = await raw(base, "PUT", "/api/settings", { origin: "http://localhost:5173", "content-type": "application/json", ...WRITE }, JSON.stringify({ theme: "space" }));
   expect(local.status).toBe(200);
   expect((await snapshot(base)).settings.theme).toBe("space");
+});
+
+test("every API write without X-Agent-World: 1 is refused with 403 and changes nothing; with it, it works; ingest needs none", async () => {
+  const store = openStore(":memory:");
+  const w = createWorld(store.load(), deps());
+  store.persist(w.apply(ev("session_start")));
+  store.persist([{ type: "character", character: { ...w.snapshot(0, false).characters[0]!, xp: 600 } }]);
+  const { run, calls } = runRecorder();
+  const { base } = await start({ store, run, readTranscript: byModel(async () => "claude-sonnet-4-5") });
+  await hook(base, "SessionStart");                                     // a real session with an iTerm terminal (ingest: no header needed)
+  await ingest(base, fx("Stop"));
+  const before = await snapshot(base);
+  const key = encodeURIComponent(SESSION_KEY);
+  const char = before.characters.find(c => c.id !== before.sessions[0]!.characterId) ?? before.characters[0]!;
+  const writes: [string, string, unknown][] = [
+    ["PATCH", `/api/characters/${char.id}`, { name: "Pwned" }],
+    ["POST", `/api/sessions/${key}/ack`, undefined],
+    ["POST", `/api/sessions/${key}/focus`, undefined],
+    ["POST", "/api/shop/buy", { id: "office.wall-art" }],
+    ["PUT", "/api/settings", { theme: "space" }],
+    ["POST", `/api/sessions/${key}/dismiss`, undefined],
+    ["DELETE", "/api/snapshot", undefined],
+  ];
+  const missing: Record<string, string>[] = [{}, { "x-agent-world": "0" }, { "x-agent-world": "true" }, { "x-agent-world": "" }];
+  for (const bad of missing) {
+    for (const [method, path, body] of writes) expect((await send(base, method, path, body, bad)).status).toBe(403);
+  }
+  expect({ ...(await snapshot(base)), serverTime: 0 }).toEqual({ ...before, serverTime: 0 });
+  expect(calls).toEqual([]);
+  expect(store.load().purchases).toEqual([]);
+  const ok = await Promise.all(writes.slice(0, 5).map(([method, path, body]) => send(base, method, path, body).then(r => r.status)));
+  expect(ok).toEqual([200, 204, 200, 200, 200]);
+  expect((await send(base, "POST", `/api/sessions/${key}/dismiss`)).status).toBe(204);
+  expect((await send(base, "DELETE", "/api/snapshot")).status).toBe(404);
+  const after = await snapshot(base);
+  expect(after.settings.theme).toBe("space");
+  expect(after.characters.find(c => c.id === char.id)!.name).toBe("Pwned");
+  expect(after.shop.owned).toEqual(["office.wall-art"]);
+  expect(after.sessions.map(x => x.key)).not.toContain(SESSION_KEY);
+  expect(calls.length).toBeGreaterThan(0);
 });
 
 type FakeRes = ServerResponse & { status: number | undefined; done: Promise<void> };
@@ -776,6 +832,134 @@ test("a restarted app continues from the saved cursor; a removed session's curso
   expect(second.store.loadServerState().has(SESSION_KEY)).toBe(false);
 });
 
+// --- subagent usage, read from the subagent's own transcript when it stops ---
+
+const SUB_STOP = JSON.parse(fx("SubagentStop")) as { agent_id: string; agent_transcript_path: string };
+const AGENT_PATH = SUB_STOP.agent_transcript_path;
+const subTokens = { input: 2, output: 145, cacheRead: 30058, cacheWrite: 4890, cacheWrite1h: 0 };
+const HAIKU_SUB_COST = 985;            // (2×100 + 145×500 + 4890×125 + 30058×10) / 1000 = 984.53 → 985 micros
+
+type SubRead = { cursor: UsageCursor | null; opts: unknown };
+/** An app whose usage reader answers the subagent's transcript from `script` (call number → result) and the main one with nothing. */
+async function subagentRig(script: (call: number, cursor: UsageCursor) => ReturnType<typeof readUsage>) {
+  const calls: SubRead[] = [];
+  const logged: AgentEvent[] = [];
+  const inner = openStore(":memory:");
+  const store: Store = { ...inner, logEvent: e => { logged.push(structuredClone(e)); inner.logEvent(e); } };
+  const read: typeof readUsage = async (p, cursor, opts) => {
+    if (p !== AGENT_PATH) return noUsage(p, cursor);
+    calls.push({ cursor: structuredClone(cursor), opts: structuredClone(opts) });
+    return script(calls.length, cursor!);
+  };
+  const r = await start({ store, readUsage: read });
+  const usage = async () => (await snapshot(r.base)).sessions[0]?.usage ?? null;
+  const settle = async () => { for (let i = 0; i < 10; i++) await flush(); };
+  return { ...r, calls, logged, usage, settle };
+}
+const oneBatch = (cursor: UsageCursor) => ({
+  cursor: { offset: cursor.offset + 500, ids: [...cursor.ids, "msg_01xyz"] },
+  batches: [{ model: "claude-haiku-5-5", longPrompt: false, usage: { ...subTokens } }],
+});
+const done = (cursor: UsageCursor) => ({ cursor, batches: [] });
+
+test("SubagentStop for a known session reads the subagent's transcript from its start and credits it as sidekick usage at the subagent's model", async () => {
+  const { base, calls, usage, settle, logged } = await subagentRig((n, c) => Promise.resolve(n === 1 ? oneBatch(c) : done(c)));
+  await ingest(base, startWithModel); await flush();
+  await ingest(base, fx("SubagentStart"));
+  await ingest(base, fx("SubagentStop")); await settle();
+  expect(calls).toEqual([{ cursor: { offset: 0, ids: [] }, opts: { sidechain: true } }, { cursor: { offset: 500, ids: ["msg_01xyz"] }, opts: { sidechain: true } }]);
+  expect(await usage()).toEqual({ ...subTokens, costMicros: HAIKU_SUB_COST });   // priced at Haiku, not the session's Opus
+  const text = JSON.stringify(logged) + JSON.stringify(await snapshot(base));
+  expect(text).not.toContain(AGENT_PATH);
+  expect(text).not.toContain("subagents/agent-");
+  expect(logged.map(e => e.kind)).toEqual(["session_start", "sub_start", "sub_end"]);   // the usage itself is not logged
+});
+
+test("a long-prompt subagent batch is priced at the long-prompt rate", async () => {
+  const { base, usage, settle } = await subagentRig((n, c) => Promise.resolve(n === 1
+    ? { cursor: { offset: 9, ids: ["x"] }, batches: [{ model: "claude-haiku-5-5", longPrompt: true, usage: { ...subTokens } }] } : done(c)));
+  await ingest(base, startWithModel); await flush();
+  await ingest(base, fx("SubagentStop")); await settle();
+  // long-prompt Haiku: (2×500 + 145×2500 + 4890×625 + 30058×50) / 1000 = 4922.65 → 4923
+  expect(await usage()).toEqual({ ...subTokens, costMicros: 4923 });
+});
+
+test("each batch becomes one usage event with sidekick, the batch's model and longPrompt", async () => {
+  const { base, settle } = await subagentRig((n, c) => Promise.resolve(n === 1 ? {
+    cursor: { offset: 9, ids: ["x"] },
+    batches: [{ model: "claude-haiku-5-5", longPrompt: true, usage: { ...subTokens } }, { model: "claude-sonnet-5-5", longPrompt: false, usage: { ...subTokens } }],
+  } : done(c)));
+  await ingest(base, startWithModel); await flush();
+  applied.length = 0;
+  await ingest(base, fx("SubagentStop")); await settle();
+  const usages = applied.filter(e => e.kind === "usage");
+  expect(usages).toEqual([
+    { source: "claude-code", sessionId: START.session_id, repoPath: START.cwd, at: expect.any(Number), kind: "usage", usage: subTokens, usageModel: "claude-haiku-5-5", longPrompt: true, sidekick: true },
+    { source: "claude-code", sessionId: START.session_id, repoPath: START.cwd, at: expect.any(Number), kind: "usage", usage: subTokens, usageModel: "claude-sonnet-5-5", sidekick: true },
+  ]);
+});
+
+test("a second SubagentStop for the same agent id adds nothing", async () => {
+  const { base, calls, usage, settle } = await subagentRig((n, c) => Promise.resolve(c.offset === 0 ? oneBatch(c) : done(c)));
+  await ingest(base, startWithModel); await flush();
+  await ingest(base, fx("SubagentStop")); await settle();
+  await ingest(base, fx("SubagentStop")); await settle();
+  expect(calls).toHaveLength(2);                                        // the first stop's two reads; none for the repeat
+  expect(await usage()).toEqual({ ...subTokens, costMicros: HAIKU_SUB_COST });
+  await ingest(base, JSON.stringify({ ...SUB_STOP, agent_id: "a-second-agent" })); await settle();
+  expect((await usage())?.input).toBe(4);                               // another agent is its own run
+});
+
+test("SubagentStop for an unknown session reads nothing", async () => {
+  const { base, calls, settle } = await subagentRig((_n, c) => Promise.resolve(oneBatch(c)));
+  await ingest(base, fx("SubagentStop")); await settle();
+  expect(calls).toEqual([]);
+  expect((await snapshot(base)).sessions).toEqual([]);
+});
+
+test("SubagentStop without a string agent_transcript_path reads nothing", async () => {
+  const { base, calls, settle } = await subagentRig((_n, c) => Promise.resolve(oneBatch(c)));
+  await ingest(base, startWithModel); await flush();
+  for (const p of [undefined, 7, ""]) { await ingest(base, JSON.stringify({ ...SUB_STOP, agent_transcript_path: p })); await settle(); }
+  expect(calls).toEqual([]);
+});
+
+test("a missing subagent transcript adds nothing and throws nothing", async () => {
+  const error = vi.spyOn(console, "error").mockImplementation(() => {});
+  const missing = join(mkdtempSync(join(tmpdir(), "aw-sub-")), "missing.jsonl");
+  const { readUsage: real } = await import("../../src/server/usageReader");
+  const { base, calls, usage, settle } = await subagentRig((_n, c) => real(missing, c, { sidechain: true }));
+  await ingest(base, startWithModel); await flush();
+  expect((await ingest(base, fx("SubagentStop"))).status).toBe(204); await settle();
+  expect(calls).toHaveLength(1);
+  expect((await usage())?.input).toBe(0);
+  expect(error).not.toHaveBeenCalled();
+});
+
+test("a multi-read subagent transcript is read until the cursor stops advancing, and never past 16 reads", async () => {
+  const many = await subagentRig((n, c) => Promise.resolve(n <= 3 ? { cursor: { offset: c.offset + 4_000_000, ids: [`m${n}`] }, batches: [{ model: "claude-haiku-5-5", longPrompt: false, usage: { ...subTokens, cacheRead: 0, cacheWrite: 0, input: 1, output: 0 } }] } : done(c)));
+  await ingest(many.base, startWithModel); await flush();
+  await ingest(many.base, fx("SubagentStop")); await many.settle();
+  expect(many.calls.map(c => c.cursor?.offset)).toEqual([0, 4_000_000, 8_000_000, 12_000_000]);
+  expect((await many.usage())?.input).toBe(3);
+  const endless = await subagentRig((n, c) => Promise.resolve({ cursor: { offset: c.offset + 1, ids: [] }, batches: [{ model: "claude-haiku-5-5", longPrompt: false, usage: { input: 1, output: 0, cacheRead: 0, cacheWrite: 0, cacheWrite1h: 0 } }] }));
+  await ingest(endless.base, startWithModel); await flush();
+  await ingest(endless.base, fx("SubagentStop")); await endless.settle(); await endless.settle();
+  expect(endless.calls).toHaveLength(16);
+  expect((await endless.usage())?.input).toBe(16);
+});
+
+test("a slow subagent transcript read does not hold up the ingest response", async () => {
+  const { base, calls } = await subagentRig(() => new Promise(() => {}));
+  await ingest(base, startWithModel); await flush();
+  const t0 = Date.now();
+  expect((await ingest(base, fx("SubagentStop"))).status).toBe(204);
+  expect(Date.now() - t0).toBeLessThan(1000);
+  await flush();
+  expect(calls).toHaveLength(1);
+  expect((await snapshot(base)).sessions[0]!.sidekicks).toEqual([]);
+});
+
 test("POST /api/shop/buy: 200 with the new state, 400 unknown or bad body, 409 owned or poor, 403 foreign", async () => {
   const store = openStore(":memory:");
   const w = createWorld(store.load(), deps());
@@ -850,8 +1034,9 @@ test("a hook request for a known session saves its terminal once, and again only
   expect(store.loadServerState().get(SESSION_KEY)?.terminal).toEqual({ ...TERMINAL, tty: "ttys013" });
 });
 
-test("terminal values never reach the snapshot or the stream", async () => {
-  const { base } = await start({ readTranscript: byModel(async () => "claude-sonnet-4-5") });
+test("terminal values never reach the snapshot, the stream or the stored event log", async () => {
+  const dbPath = `${mkdtempSync(join(tmpdir(), "aw-app-"))}/w.db`;
+  const { base } = await start({ store: openStore(dbPath), readTranscript: byModel(async () => "claude-sonnet-4-5") });
   const next = await openStream(base);
   const texts = [JSON.stringify((await next()).data)];
   await hook(base, "SessionStart");
@@ -862,7 +1047,13 @@ test("terminal values never reach the snapshot or the stream", async () => {
   const res = await fetch(`${base}/api/snapshot`);
   texts.push(await res.text());
   expect(texts.at(-1)).toContain(SESSION_KEY.split(":")[1]);           // the session is there
-  for (const t of texts) for (const v of [...Object.values(TERMINAL), "zq7"]) expect(t).not.toContain(v);
+  // the event log as stored on disk: every row's payload and columns
+  const db = new DatabaseSync(dbPath, { readOnly: true });
+  const rows = db.prepare("SELECT * FROM events").all();
+  db.close();
+  expect(rows.length).toBeGreaterThanOrEqual(2);
+  texts.push(JSON.stringify(rows));
+  for (const t of texts) for (const v of [...Object.values(TERMINAL), "zq7", "w0t1p0"]) expect(t).not.toContain(v);
   expect((await snapshot(base)).focus).toEqual({ [SESSION_KEY]: "exact" });   // only the precision is shown
 });
 

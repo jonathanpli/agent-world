@@ -35,25 +35,6 @@ function toolSummary(name: string, input: unknown): string {
   return `${name} ${arg}`.slice(0, CONFIG.summaryMax);
 }
 
-const count = (v: unknown): number => (typeof v === "number" && Number.isFinite(v) && v > 0 ? v : 0);
-
-/** The token totals an Agent tool's response reports for the whole subagent run, or undefined when it reports none. */
-function agentUsage(response: unknown): Pick<AgentEvent, "usage" | "usageModel" | "sidekick"> | undefined {
-  if (!isRecord(response) || !isRecord(response.usage)) return undefined;
-  const u = response.usage;
-  const model = str(response.resolvedModel);
-  const total = count(u.cache_creation_input_tokens);
-  const cacheWrite1h = isRecord(u.cache_creation) ? count(u.cache_creation.ephemeral_1h_input_tokens) : 0;
-  return {
-    usage: {
-      input: count(u.input_tokens), output: count(u.output_tokens), cacheRead: count(u.cache_read_input_tokens),
-      cacheWrite: Math.max(0, total - cacheWrite1h), cacheWrite1h,   // disjoint: the total counts both
-    },
-    ...(model !== undefined && model !== "" && { usageModel: model }),
-    sidekick: true,
-  };
-}
-
 function parse(raw: unknown, now: number): AgentEvent[] {
   try {
     if (!isRecord(raw)) return [];
@@ -91,8 +72,7 @@ function parse(raw: unknown, now: number): AgentEvent[] {
         const moment = command !== undefined ? momentFor(command, failure) : null;
         const stdout = isRecord(raw.tool_response) ? str(raw.tool_response.stdout) : undefined;
         const subject = moment === "commit" && stdout !== undefined ? commitSubject(stdout) : null;
-        const sub = !failure && (tool === "Agent" || tool === "Task") ? agentUsage(raw.tool_response) : undefined;
-        return ev("tool", { ...(effort && { effort }), ...(failure && { failed: true as const }), ...(moment !== null && { moment }), ...sub },
+        return ev("tool", { ...(effort && { effort }), ...(failure && { failed: true as const }), ...(moment !== null && { moment }) },
           { tool, summary: toolSummary(tool, raw.tool_input), toolKind: toolKindFor(tool), ...(inSub && { agentId, agentType }), ...(subject !== null && { momentText: subject }) });
       }
       case "SubagentStart":

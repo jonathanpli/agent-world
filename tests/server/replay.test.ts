@@ -5,7 +5,7 @@ import { afterEach, expect, test } from "vitest";
 import { createApp, type App } from "../../src/server/app";
 import { openStore, type Store } from "../../src/server/store";
 import type { Delta, Recap, Snapshot } from "../../src/shared/types";
-import type { UsageBatch, UsageCursor } from "../../src/server/usageReader";
+import type { readUsage, UsageBatch, UsageCursor } from "../../src/server/usageReader";
 
 /** The captured Claude Code payloads, replayed in the order a real turn with a subagent and a failing command produces them. */
 const fx = (name: string): string => readFileSync(`tests/fixtures/claude-code/${name}.json`, "utf8");
@@ -21,13 +21,26 @@ afterEach(async () => {
   open = null;
 });
 
-test("replaying captured hooks: one sidekick comes and goes, a failure is marked, the recap adds up", async () => {
+/** The browser app's header on every API write. */
+const WRITE = { "x-agent-world": "1" };
+
+test("replaying captured hooks: one sidekick comes and goes with its own tokens, a failure is marked, the recap adds up", async () => {
   const store = openStore(":memory:");
+  // the subagent's own transcript (named by SubagentStop) holds one Haiku message; the main transcript has nothing new
+  const agentPath = (JSON.parse(fx("SubagentStop")) as { agent_transcript_path: string }).agent_transcript_path;
+  const subReads: unknown[] = [];
+  const subUsage = { input: 2, output: 145, cacheRead: 30058, cacheWrite: 4890, cacheWrite1h: 0 };
+  const read: typeof readUsage = async (path, cursor, opts) => {
+    const c = cursor ?? { offset: 0, ids: [] };
+    if (path !== agentPath) return { cursor: c, batches: [] };
+    subReads.push(opts);
+    return c.offset === 0 ? { cursor: { offset: 700, ids: ["msg_01xyz"] }, batches: [{ model: "claude-haiku-5-5", longPrompt: false, usage: subUsage }] } : { cursor: c, batches: [] };
+  };
   // The model is reported by the transcript, so the session binds and its work is credited at once.
   // a fixed midday clock: the events and the recap's "today" can never straddle a local midnight
   const NOW = new Date(2026, 5, 10, 12).getTime();
   const app = createApp({
-    store, demo: false, resolveRepo: async p => p, now: () => NOW,
+    store, demo: false, resolveRepo: async p => p, now: () => NOW, readUsage: read,
     readTranscript: async () => ({ model: "claude-opus-5-5", contextTokens: null, boundaries: [] }),
   });
   const server = createServer(app.handler);
@@ -44,15 +57,23 @@ test("replaying captured hooks: one sidekick comes and goes, a failure is marked
   expect((await session()).sidekicks).toHaveLength(1);
   await ingest("PostToolUse.subagent");
   expect((await session()).sidekicks).toHaveLength(1);
+  expect((await session()).usage.input).toBe(0);
   await ingest("SubagentStop");
+  await flush(); await flush();
   expect((await session()).sidekicks).toEqual([]);
+  expect(subReads).toEqual([{ sidechain: true }, { sidechain: true }]);
+  // counted at the end of the subagent's run, priced at its own model (Haiku 5.5): 984.53 → 985 micros
+  expect((await session()).usage).toEqual({ ...subUsage, costMicros: 985 });
+  await ingest("SubagentStop");                                        // a repeated stop for the same agent adds nothing
+  expect((await session()).usage.input).toBe(2);
+  expect(subReads).toHaveLength(2);
   await ingest("PostToolUseFailure.bash");
   expect((await session()).lastTool?.failed).toBe(true);
   await ingest("Stop");
 
   const recap = await ((await fetch(`${base}/api/recap`)).json() as Promise<Recap>);
   expect(recap.day).toBe("2026-06-10");
-  expect(recap.totals).toMatchObject({ sidekicks: 1, failures: 1, tasks: 1 });
+  expect(recap.totals).toMatchObject({ sidekicks: 1, failures: 1, tasks: 1, input: 2, output: 145, costMicros: 985 });
 });
 
 test("replaying a working session: a commit, token usage, an iTerm jump and a purchase all add up", async () => {
@@ -110,7 +131,10 @@ test("replaying a working session: a commit, token usage, an iTerm jump and a pu
 
   // the terminal: exact focus in the snapshot, and the jump runs osascript with the session's UUID
   expect((await snapshot()).focus).toEqual({ [key]: "exact" });
-  const jump = await fetch(`${base}/api/sessions/${encodeURIComponent(key)}/focus`, { method: "POST" });
+  // the terminal's identifiers stay in the server: none of the X-AW values appears anywhere in the snapshot
+  const snapText = await (await fetch(`${base}/api/snapshot`)).text();
+  for (const v of [...Object.values(iterm), "8D6F3C1A", "w0t0p0"]) expect(snapText).not.toContain(v);
+  const jump = await fetch(`${base}/api/sessions/${encodeURIComponent(key)}/focus`, { method: "POST", headers: WRITE });
   expect(jump.status).toBe(200);
   expect(await jump.json()).toEqual({ precision: "exact" });
   const script = calls.find(c => c.file === "/usr/bin/osascript");
@@ -134,11 +158,12 @@ test("replaying a working session: a commit, token usage, an iTerm jump and a pu
   const recap = await ((await fetch(`${base}/api/recap`)).json() as Promise<Recap>);
   expect(recap.totals).toMatchObject({ commits: 1, input: 1000, output: 500, cacheRead: 2000, costMicros: used.costMicros });
 
-  // the shop: earn the price of the desk plants, buy them, and the wallet drops by that price
+  // the shop: earn the price of the office plants, buy them, and the wallet drops by that price
   for (let i = 0; i < 4; i++) { await post(fx("UserPromptSubmit")); await post(fx("Stop")); }
   const before = (await snapshot()).shop;
   expect(before.coins).toBeGreaterThanOrEqual(100);
-  const bought = await fetch(`${base}/api/shop/buy`, { method: "POST", body: JSON.stringify({ id: "office.desk-plants" }) });
+  expect((await fetch(`${base}/api/shop/buy`, { method: "POST", body: JSON.stringify({ id: "office.desk-plants" }) })).status).toBe(403);   // no write header
+  const bought = await fetch(`${base}/api/shop/buy`, { method: "POST", body: JSON.stringify({ id: "office.desk-plants" }), headers: WRITE });
   expect(bought.status).toBe(200);
   expect((await snapshot()).shop).toEqual({ coins: before.coins - 100, owned: ["office.desk-plants"] });
   await reader.cancel();

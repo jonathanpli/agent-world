@@ -118,6 +118,8 @@ export function createApp(opts: AppOptions): App {
   const usageCursors = new Map<string, UsageCursor>();
   /** sessionKey → the terminal its hook last reported. Server-side only: never in a snapshot or a delta. */
   const terminals = new Map<string, TerminalInfo>();
+  /** sessionKey → the subagent ids whose own transcripts were already read for usage (newest last, at most CONFIG.usage.subagentIdsMax). */
+  const countedAgents = new Map<string, string[]>();
   /** sessionKey → the focus request running for it: a second request while it runs gets the same result. */
   const focusing = new Map<string, Promise<FocusResult | null>>();
   for (const [key, { cursor, terminal }] of store.loadServerState()) {
@@ -150,7 +152,7 @@ export function createApp(opts: AppOptions): App {
     for (const d of deltas) {
       if (d.type === "session") sessionWantsModel.set(d.session.key, wantsModel(d.session));
       else if (d.type === "session_removed") {
-        sessionWantsModel.delete(d.key); modelTries.delete(d.key); forgetContextReads(d.key); usageCursors.delete(d.key);
+        sessionWantsModel.delete(d.key); modelTries.delete(d.key); forgetContextReads(d.key); usageCursors.delete(d.key); countedAgents.delete(d.key);
         if (focusOf(d.key) !== null) focusGone.push({ type: "focus", key: d.key, precision: null });
         terminals.delete(d.key);
       }
@@ -267,6 +269,37 @@ export function createApp(opts: AppOptions): App {
   }
 
   /**
+   * Counts a finished subagent's tokens from its own transcript, once per agent id and known session: reads it from the
+   * start (sidechain entries included) until the cursor stops advancing, at most CONFIG.usage.subagentReadsMax reads, and
+   * applies one sidekick `usage` event per batch (not logged). The path is used for this read only, never kept.
+   */
+  function countSubagent(source: string, sessionId: string, agentId: string, path: string, repoPath: string): void {
+    const key = `${source}:${sessionId}`;
+    if (closed || !sessionWantsModel.has(key)) return;   // the map holds every known session
+    const counted = countedAgents.get(key) ?? [];
+    if (counted.includes(agentId)) return;
+    counted.push(agentId);
+    countedAgents.set(key, counted.slice(-CONFIG.usage.subagentIdsMax));
+    void (async () => {
+      let cursor: UsageCursor = { offset: 0, ids: [] };
+      for (let n = 0; n < CONFIG.usage.subagentReadsMax; n++) {
+        const r = await readUsage(path, cursor, { sidechain: true });
+        if (closed) return;
+        await enqueue(() => {
+          if (closed || !sessionWantsModel.has(key)) return;
+          for (const b of r.batches) {
+            commit(world.apply({
+              source, sessionId, repoPath, at: now(), kind: "usage", usage: b.usage, usageModel: b.model, ...(b.longPrompt && { longPrompt: true }), sidekick: true,
+            }));
+          }
+        });
+        if (r.cursor.offset === cursor.offset) return;
+        cursor = r.cursor;
+      }
+    })().catch(e => { console.error("agent-world: subagent usage read failed", e); });
+  }
+
+  /**
    * Merges the terminal a hook reported into the one kept for a session the world knows (see `mergeTerminal`), saves the
    * result when it differs, and broadcasts a `focus` delta when that changes how the session can be focused.
    */
@@ -311,6 +344,10 @@ export function createApp(opts: AppOptions): App {
       const terminal = terminalFromHeaders(req.headers);
       if (terminal !== null && isRecord(raw) && nonEmpty(raw.session_id)) rememberTerminal(`${source}:${raw.session_id}`, terminal);
       if (readTrigger !== null) scheduleContextRead(source, readTrigger.sessionId, readTrigger.path, readTrigger.repoPath);
+      // a finished subagent's tokens are in its own transcript; read in the background, never awaited here
+      if (isRecord(raw) && raw.hook_event_name === "SubagentStop" && nonEmpty(raw.session_id) && nonEmpty(raw.agent_id) && nonEmpty(raw.agent_transcript_path)) {
+        countSubagent(source, raw.session_id, raw.agent_id, raw.agent_transcript_path, typeof raw.cwd === "string" ? raw.cwd : "");
+      }
     } finally {
       sendStatus(res, 204);
     }
@@ -418,6 +455,8 @@ export function createApp(opts: AppOptions): App {
 
     if (method === "POST" && (m = path.match(/^\/ingest\/([^/]+)$/))) return ingest(req, res, decode(m[1]!) ?? m[1]!, foreignOrigin);
     if (foreignOrigin) { sendStatus(res, 403); return; }
+    // an API write must carry the browser app's own header: a page elsewhere cannot add one without a preflight we never answer
+    if (method !== "GET" && path.startsWith("/api/") && req.headers["x-agent-world"] !== "1") { sendStatus(res, 403); return; }
 
     const badEscape = (): void => sendJson(res, 400, { error: "malformed URL escape" });
 
