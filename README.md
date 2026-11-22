@@ -102,7 +102,7 @@ Characters that are not working wander to the lounge and chat, with speech bubbl
 
 The **Recap** button in the top bar opens a card for one day, with arrows to the previous and next day that have data: tasks finished, tools used, XP and levels; the MVP (most XP, drawn with its sprite); the busiest repo; compactions, sidekicks and failed tools when not zero; and the streak ("4 days running": consecutive days, ending today or yesterday, with at least one finished task). An empty day says "Nothing yet today". The first time you open the page on a new day, one toast shows yesterday's totals with a link to its card.
 
-A day is the server machine's local calendar date (it rolls over at local midnight). Counts are credited when XP is actually credited to a character, so XP held while a session is "Arriving" lands on the day it is released. Recap rows are kept apart from the event log, so they are not pruned after 30 days, and they start from the day this feature ships (no backfill). The API behind the page is local only: `GET /api/snapshot`, `PUT /api/settings` and `GET /api/recap?day=YYYY-MM-DD` (default today).
+A day is the server machine's local calendar date (it rolls over at local midnight). Counts are credited when XP is actually credited to a character, so XP held while a session is "Arriving" lands on the day it is released. Recap rows are kept apart from the event log, so they are not pruned after 30 days, and they start from the day this feature ships (no backfill). The API behind the page is local only: `GET /api/snapshot`, `PUT /api/settings` and `GET /api/recap?day=YYYY-MM-DD` (default today). Every API write (`POST`, `PUT`, `PATCH` or `DELETE` under `/api/`) must carry the header `X-Agent-World: 1`, which the page sends and another web page cannot add without asking first; without it the server answers 403. The hook's `/ingest/…` route needs no such header.
 
 ## Background service, tokens, jump, git moments and shop
 
@@ -121,9 +121,9 @@ npm run service:uninstall   # stops it and deletes the plist; ~/.agent-world is 
 npm run service:install -- --dry-run   # prints the plist and the steps it would take; changes nothing
 ```
 
-- Install refuses on anything but macOS, and when the `node` running it is older than 22.13. The plist pins the absolute path of that `node`, runs the repository's `tsx` on `src/server/main.ts`, and writes output to `~/.agent-world/server.log`. The server cuts that log back to nothing at start when it is over 5 MB.
-- The plist always carries the `PATH` of the shell you installed from (a login item otherwise has almost none). It also carries `AGENT_WORLD_PORT` and `AGENT_WORLD_HOME` when they were set at install time.
-- Running install again replaces the old copy: it stops it first, then checks the port. If the port is held by something else (for example a server you started by hand), install stops and says so. It never ends another process.
+- Install refuses on anything but macOS, when the `node` running it is older than 22.13, and when `node_modules/tsx` is missing from the checkout (run `npm install` first). The plist pins the absolute path of that `node`, runs the repository's `tsx` on `src/server/main.ts`, and writes output to `~/.agent-world/server.log`. The server cuts that log back to nothing at start when it is over 5 MB.
+- The plist always carries the `PATH` of the shell you installed from (a login item otherwise has almost none). It also carries `AGENT_WORLD_PORT` and `AGENT_WORLD_HOME` when they were set at install time; a relative `AGENT_WORLD_HOME` is made absolute from the folder you ran install in, and the log goes there too.
+- Running install again replaces the old copy: it stops it first, then checks the port. If the port is held by something else (for example a server you started by hand), install stops and says so. A plist left behind with no service loaded holds no port, so a busy port then stops install at once, before anything changes. It never ends another process.
 - **What breaks it:** moving or renaming the repository, deleting the `node` version it was installed with (nvm users: uninstalling that Node version), or deleting `node_modules`. Run `npm run service:status` (it shows whether the node path still exists), fix the cause, then run install again. If the service does not come up, read `~/.agent-world/server.log`.
 - Stop a hand-started server (`npm start`) before installing, or the port is busy.
 
@@ -132,7 +132,7 @@ npm run service:install -- --dry-run   # prints the plist and the steps it would
 Each session shows the tokens it has used, and an estimated cost.
 
 - Where to look: the inspector's Now tab ("Tokens this session: 1.2M in · 48k out · 9.4M cached · est. $3.10", where "cached" is cache reads), the History tab (lifetime totals for the character) and the Recap card (the day's tokens and cost).
-- **What is counted:** the token usage on the assistant replies in each session's transcript, from the main conversation, each reply once, plus the totals the `Agent` tool reports when a subagent finishes (subagent tokens come from that result, not from the transcript). Input, output, cache reads and cache writes (5-minute and 1-hour writes are priced separately) are counted. Transcripts are read from where the last read stopped, at most 4 MB at a time, and no message text is read from them.
+- **What is counted:** the token usage on the assistant replies in each session's transcript, from the main conversation, each reply once, plus each subagent's own replies. A subagent's tokens are read from its own transcript (the file Claude Code names when the subagent stops), once, when it finishes: they appear at the end of the subagent's run, priced at the subagent's model. A subagent still running when its session ends is not counted. Input, output, cache reads and cache writes (5-minute and 1-hour writes are priced separately) are counted. Transcripts are read from where the last read stopped, at most 4 MB at a time, and no message text is read from them.
 - **From when:** counting starts when a session's transcript is first seen, so anything used before Agent World knew the session is not counted. There is no backfill. Tokens used while a session is still "Arriving" are held and credited when it joins, like XP.
 - **The cost is an estimate** from public API prices, not your bill. It does not reflect a subscription plan (Pro, Max or Team), where usage is not billed per token. The price table is in `src/shared/prices.ts` and was taken from Anthropic's pricing page on **2026-11-21**; prices change, and it is not updated by itself. Prices are matched on the model id (Haiku, Sonnet, Opus and Fable/Mythos, current and previous generations; Haiku's higher rate applies to a single message whose prompt is over 100 000 tokens). A model that matches no row shows its tokens with no cost, and adds nothing to the dollar totals.
 - To hide every dollar figure, switch off **Show estimated cost** in Settings. Tokens stay.
@@ -159,9 +159,9 @@ tmux is a layer on top: if the session runs in a tmux pane, the window and pane 
 Details:
 
 - Identifiers must look safe or that driver is skipped: an iTerm id must be a UUID (the part after `w0t0p0:`), and the others must start with a letter or digit. A skipped driver falls through to the next one.
-- The server only runs fixed programs (`osascript`, `open`, `mdfind`, `tmux`, `cmux`) without a shell, each limited to 3 seconds, and a whole jump to 8 seconds. Only one jump per session runs at a time; a second click joins it.
+- The server only runs fixed programs (`osascript`, `open`, `mdfind`, `tmux`, `cmux`) without a shell, each limited to 3 seconds, and no new step starts once a jump has run for 8 seconds (so a jump can take about 11). Only one jump per session runs at a time; a second click joins it.
 - **macOS asks for permission once.** The first time a jump needs to script iTerm or Terminal, macOS shows an Automation prompt ("... wants to control iTerm"). Allow it. If you refused it, turn it on under System Settings, Privacy & Security, Automation, for the app that runs the server (your terminal if you started the server by hand; for the service, macOS names whatever it asked about). Until then a jump falls back to raising the window and says macOS may be denying permission.
-- The program to look for is `cmux`; it is searched on `PATH`, and, for a session whose app has cmux's own bundle id (`com.cmuxterm.app` or `com.cmuxterm.app.*`), also inside the cmux app. For any other app only `cmux` on `PATH` is used.
+- The program to look for is `cmux`; it is searched on `PATH`, and, for a session whose app has cmux's own bundle id (`com.cmuxterm.app` or `com.cmuxterm.app.*`), also inside the cmux app: first `cmux.app` in `/Applications` and `~/Applications`, then any app Spotlight finds for that bundle id, but only one directly in one of those two folders (a copy in Downloads or on a mounted disk is never run). For any other app only `cmux` on `PATH` is used.
 
 #### Jumping to cmux tabs
 
@@ -174,18 +174,18 @@ cmux has an access mode for its control socket. By default it may accept only pr
 
 If the note says the `cmux` program was not found, put it on `PATH` (a service's `PATH` is the one from install time; run install again after changing it), or install cmux in `/Applications`.
 
-cmux also has its own notifications and its own Claude Code hooks. They can run alongside Agent World, but one event may then alert you twice. If so, switch off Agent World's system notifications in Settings (the toasts and ticker are unaffected).
+cmux also has its own notifications and its own Claude Code hooks. They can run alongside Agent World, but one event may then alert you twice. If so, switch off "Notify when an agent needs you" and "Notify when an agent finishes" (and, if you like, "Context running low") in Settings; these also hide the matching toasts. To keep the toasts and drop only the system notifications, block notifications for the page in the browser's site settings. The ticker is unaffected either way.
 
 ### Git moments
 
-Commits, pull requests and test runs become visible events and a little XP. They are recognised from the shell commands an agent runs (the `Bash` tool), in `src/adapters/moments.ts`. Commands are split on `&&`, `||`, `;`, `|` and newlines; a leading `cd …`, environment assignments (`FOO=1`) and one `rtk` are skipped; `git -C dir …` is understood.
+Commits, pull requests and test runs become visible events and a little XP. They are recognised from the shell commands an agent runs (the `Bash` tool), in `src/adapters/moments.ts`. Commands are split on `&&`, `||`, `;`, `|`, a single `&` (a command sent to the background; not the `&` in `2>&1` or `&>`) and newlines; a leading `cd …`, environment assignments (`FOO=1`) and one `rtk` are skipped; `git -C dir …` is understood.
 
 | Moment | Recognised command | When |
 |---|---|---|
 | Commit | `git commit …` (not `--dry-run`) | it succeeded |
-| Push | `git push …` | it succeeded |
+| Push | `git push …` (not `--dry-run` or `-n`) | it succeeded |
 | PR opened | `gh pr create …` | it succeeded |
-| PR merged | `gh pr merge …` | it succeeded |
+| PR merged | `gh pr merge …` (not `--auto`) | it succeeded |
 | Tests passed | `npm test`, `npm run test…`, `pnpm`/`yarn`/`bun` `test`, `npx vitest`/`jest`/`pytest`/`rspec`/`phpunit`, `vitest`, `jest`, `pytest`, `python -m pytest`, `rspec`, `phpunit`, `go test`, `cargo test`, `dotnet test`, `mvn`/`gradle` `test` | it succeeded |
 | Tests failed | the same runners | the tool failed |
 
@@ -206,7 +206,7 @@ Where you see them: always a ticker line ("Ada committed in agent-world: fix the
 Known limits:
 
 - Commands wrapped in `sudo`, `env`, `time` or `bash -c "…"` are not recognised.
-- `gh pr merge --auto` counts as merged, though GitHub merges later.
+- `gh pr merge --auto` only queues the merge, so it is not counted, not even when GitHub merges the PR later.
 - Only what the hook reports is seen: a commit made by hand in another terminal is not.
 - Moments are not counted for anything before this version.
 
@@ -219,14 +219,13 @@ XP fills one shared wallet, and coins buy cosmetic upgrades for each world. They
 
 | Cost | Office | Space | Underwater |
 |---|---|---|---|
-| 100 | Desk plants | Hydroponic planter | Sea anemones |
+| 100 | Office plants | Hydroponic planter | Sea anemones |
 | 250 | Coffee machine | Drink dispenser | Treasure chest |
 | 500 | Wall art | Star chart display | Sunken statue |
 | 1 000 | Arcade cabinet | Observation dome | Glowing jellyfish swarm |
 | 2 500 | Fish tank | Docked shuttle | Shipwreck |
 | 5 000 | Rooftop skylight | Ringed planet in the window | Friendly whale that passes by |
 
-- "Desk plants" are floor planters standing along the wall, not plants on the desks.
 - The coffee machine, drink dispenser and treasure chest also add a place for characters to stand and chat.
 - Demo mode has its own wallet and purchases in `demo.db`.
 
