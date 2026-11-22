@@ -25,10 +25,15 @@ const TABLE: Row[] = [
   { match: ["fable", "mythos"], rates: r(8_000, 40_000, 10_000, 16_000, 200) },
 ];
 
+/** A count as a BigInt: anything but a whole, safe, non-negative number is 0. */
+const tokens = (n: number): bigint => (Number.isSafeInteger(n) && n > 0 ? BigInt(n) : 0n);
+const MAX_SAFE = BigInt(Number.MAX_SAFE_INTEGER);
+
 /**
  * The estimated API cost of `u` in micro-dollars, or null when the model has no price. `longPrompt` picks Haiku's
  * rate for prompts over 100 000 tokens where the row has one. The cost is computed exactly, then rounded half up to
- * a whole micro-dollar: per-call rounding is the precision, so callers sum these integers without drift.
+ * a whole micro-dollar: per-call rounding is the precision, so callers sum these integers without drift. A count that
+ * is not a whole, safe, non-negative number counts as 0, and the result is always a safe integer (capped at the largest).
  */
 export function costMicros(model: string | undefined, u: UsageDelta, longPrompt: boolean): number | null {
   if (model === undefined) return null;
@@ -36,7 +41,8 @@ export function costMicros(model: string | undefined, u: UsageDelta, longPrompt:
   const row = TABLE.find(x => x.match.some(m => id.includes(m)));
   if (row === undefined) return null;
   const p = longPrompt && row.longPrompt !== undefined ? row.longPrompt : row.rates;
-  const milli = u.input * p.input + u.output * p.output + u.cacheWrite * p.cacheWrite + u.cacheWrite1h * p.cacheWrite1h + u.cacheRead * p.cacheRead;
-  const rest = milli % 1000;
-  return (milli - rest) / 1000 + (rest >= 500 ? 1 : 0);
+  const milli = tokens(u.input) * BigInt(p.input) + tokens(u.output) * BigInt(p.output) + tokens(u.cacheWrite) * BigInt(p.cacheWrite)
+    + tokens(u.cacheWrite1h) * BigInt(p.cacheWrite1h) + tokens(u.cacheRead) * BigInt(p.cacheRead);
+  const micros = (milli + 500n) / 1000n;
+  return Number(micros > MAX_SAFE ? MAX_SAFE : micros);
 }

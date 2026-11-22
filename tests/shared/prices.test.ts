@@ -62,6 +62,21 @@ test("fractional micros round half up per call and the result is always an integ
   }
 });
 
+test.each([[1.5], [1e308], [-3], [NaN], [Infinity], [2 ** 53]])("a count of %s is priced as 0", n => {
+  for (const k of Object.keys(zero) as (keyof UsageDelta)[]) {
+    expect(costMicros("claude-opus-5-5", { ...zero, input: 1, [k]: n }, false)).toBe(k === "input" ? 0 : 4);
+  }
+});
+
+test("the cost is always a safe integer, even for the largest safe counts", () => {
+  const max = Number.MAX_SAFE_INTEGER;
+  const c = costMicros("claude-fable-5-1", { input: max, output: max, cacheRead: max, cacheWrite: max, cacheWrite1h: max }, false);
+  expect(Number.isSafeInteger(c)).toBe(true);
+  expect(c).toBe(Number.MAX_SAFE_INTEGER);
+  expect(Number.isSafeInteger(costMicros("claude-opus-5-5", { ...zero, output: 1e12 }, false))).toBe(true);
+  expect(costMicros("claude-opus-5-5", { ...zero, output: 1e12 }, false)).toBe(20e12);
+});
+
 test("large counts stay exact", () => {
   const big: UsageDelta = { input: 3e9, output: 1e9, cacheRead: 7e9, cacheWrite: 2e9, cacheWrite1h: 1e9 };
   // 3000×4 + 1000×20 + 7000×0.2 + 2000×5 + 1000×8 dollars

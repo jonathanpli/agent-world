@@ -143,22 +143,29 @@ test("usage moves no state, attention, XP, activity or lastEventAt", () => {
   expect(chars(w)[0]!.xp).toBe(xp);
 });
 
-test("an Agent tool event carrying usage credits the tool's XP as usual plus the usage", () => {
+test("a tool event's usage is ignored: only usage events add tokens (subagent tokens arrive as sidekick usage events)", () => {
   const w = bound();
   const ds = w.apply(ev("tool", {
     at: 2000, detail: { tool: "Agent", toolKind: "delegate" },
     usage: delta({ input: 10, output: 1 }), usageModel: "claude-sonnet-5-5", sidekick: true,
   }));
-  expect(credits(ds)).toEqual([expect.objectContaining({ tools: 1, xp: CONFIG.xp.tool, usage: { ...ZERO, input: 10, output: 1, costMicros: 30 } })]);
-  expect(sess(w)[0]!.usage).toEqual({ ...ZERO, input: 10, output: 1, costMicros: 30 });
-  expect(chars(w)[0]!.usage.costMicros).toBe(30);
+  expect(credits(ds)).toEqual([expect.objectContaining({ tools: 1, xp: CONFIG.xp.tool, usage: ZERO })]);
+  expect(sess(w)[0]!.usage).toEqual(ZERO);
+  expect(chars(w)[0]!.usage).toEqual(ZERO);
+});
+
+test("a sidekick usage event is credited like any usage event, at its own model", () => {
+  const w = bound();
+  w.apply(usage(delta({ input: 1000 }), { at: 2000, usageModel: "claude-haiku-5-5", sidekick: true }));
+  expect(sess(w)[0]!.usage).toEqual({ ...ZERO, input: 1000, costMicros: 100 });
+  expect(chars(w)[0]!.usage).toEqual({ ...ZERO, input: 1000, costMicros: 100 });
 });
 
 test("usage credits sum to the character's lifetime usage", () => {
   const w = bound();
   const ds = [
     ...w.apply(usage(delta({ input: 3 }), { at: 2000 })),
-    ...w.apply(ev("tool", { at: 2500, usage: delta({ output: 7 }), sidekick: true })),
+    ...w.apply(usage(delta({ output: 7 }), { at: 2500, sidekick: true })),
     ...w.apply(usage(delta({ cacheRead: 9 }), { at: 3000 })),
   ];
   const sum = credits(ds).reduce((n, c) => n + c.usage.costMicros, 0);

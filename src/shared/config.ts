@@ -44,8 +44,11 @@ export const CONFIG = {
   modelGraceMs: 15_000,                           // a session with no tier this long after its first prompt joins at defaultTier
   defaultTier: 2,
   transcriptTailBytes: 262_144,
-  /** The incremental transcript usage reader: bytes per read, counted message ids remembered, and the long-prompt mark (tokens). */
-  usage: { readMaxBytes: 4_000_000, idsMax: 50, longPromptTokens: 100_000 },
+  /**
+   * The incremental transcript usage reader: bytes per read, counted message ids remembered, the long-prompt mark (tokens),
+   * reads of one finished subagent's transcript (16 × 4 MB = 64 MB), and subagent ids remembered per session as counted.
+   */
+  usage: { readMaxBytes: 4_000_000, idsMax: 50, longPromptTokens: 100_000, subagentReadsMax: 16, subagentIdsMax: 200 },
   gitTimeoutMs: 1_000,
   repoResolveTimeoutMs: 2_500,
   modelReadTimeoutMs: 1_000,
@@ -70,7 +73,7 @@ export const CONFIG = {
     momentChance: 1 / 15,                                                      // a main-thread tool is a git or test command (commits and test runs common, PRs rare)
     turnInput: [3, 120], turnOutput: [200, 2_500], turnCacheWrite1h: [500, 4_000],   // one usage event per main-thread tool; cacheRead is the context size
     subagentModel: "claude-haiku-5-5", subagentInput: [20, 400], subagentOutput: [1_000, 8_000],
-    subagentCacheRead: [20_000, 90_000], subagentCacheWrite: [2_000, 12_000],  // the Agent tool's own event carries these totals
+    subagentCacheRead: [20_000, 90_000], subagentCacheWrite: [2_000, 12_000],  // one finished subagent run, sent as a sidekick usage event after its sub_end
   },
   client: {
     noticeMax: 50,

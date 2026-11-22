@@ -337,12 +337,11 @@ export function createWorld(init: WorldInit, deps: WorldDeps): World {
   /**
    * Adds what `ev` earns to the session's held XP and counters, then settles them. A session still waiting for its
    * tier holds what it earns; a temp earns no XP but its counters are still credited. A failed tool earns nothing and
-   * counts as a failure. A moment counts always and earns its XP under its cap; a tool's usage (the Agent tool's
-   * subagent totals) is held like the rest. Returns credit and notices only; apply emits the character delta.
+   * counts as a failure. A moment counts always and earns its XP under its cap. Tokens come only from `usage` events.
+   * Returns credit and notices only; apply emits the character delta.
    */
   function award(session: Session, ev: AgentEvent): Delta[] {
     const temp = session.tierKnown && session.characterId === null;
-    if (ev.kind === "tool") addEventUsage(session, ev);
     if (ev.kind === "tool" && ev.moment !== undefined) {
       for (const k of MOMENT_COUNTS[ev.moment]) session.pendingStats[k]++;
       if (!temp && ev.failed !== true) session.pendingXp += momentXp(session, ev.moment, ev.at);

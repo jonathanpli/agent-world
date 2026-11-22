@@ -21,7 +21,7 @@ export type AgentEvent = {
   contextTokens?: number;            // context
   boundaries?: Compaction[];         // context: every boundary found in the tail, oldest first
   moment?: MomentKind;               // tool: a git or test moment recognised in a Bash command
-  usage?: UsageDelta;                // usage; and tool events for the Agent tool (the subagent's totals)
+  usage?: UsageDelta;                // usage (a subagent's tokens are usage events with `sidekick`, read from its own transcript)
   usageModel?: string;               // the model the usage is priced at
   sidekick?: true;                   // usage that belongs to a subagent
   longPrompt?: true;                 // usage: every message in this batch had a prompt over 100 000 tokens

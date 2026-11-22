@@ -19,7 +19,7 @@ test("each theme costs exactly 100, 250, 500, 1000, 2500, 5000 in order", () => 
 
 test("names match the design table and every item has a description", () => {
   const names = (t: string) => UPGRADES.filter(u => u.theme === t).map(u => u.name);
-  expect(names("office")).toEqual(["Desk plants", "Coffee machine", "Wall art", "Arcade cabinet", "Fish tank", "Rooftop skylight"]);
+  expect(names("office")).toEqual(["Office plants", "Coffee machine", "Wall art", "Arcade cabinet", "Fish tank", "Rooftop skylight"]);
   expect(names("space")).toEqual(["Hydroponic planter", "Drink dispenser", "Star chart display", "Observation dome", "Docked shuttle", "Ringed planet in the window"]);
   expect(names("underwater")).toEqual(["Sea anemones", "Treasure chest", "Sunken statue", "Glowing jellyfish swarm", "Shipwreck", "Friendly whale that passes by"]);
   expect(UPGRADES.every(u => u.description.length > 0)).toBe(true);
@@ -28,4 +28,10 @@ test("names match the design table and every item has a description", () => {
 test("the ids the art tasks key on exist", () => {
   const ids = UPGRADES.map(u => u.id);
   expect(ids).toEqual(expect.arrayContaining(["office.desk-plants", "office.coffee-machine", "space.drink-dispenser", "underwater.treasure-chest"]));
+});
+
+test("the 100-coin office upgrade is named for its art (planters along the walls) and keeps its saved id", () => {
+  const u = UPGRADES.find(x => x.id === "office.desk-plants");
+  expect(u).toEqual({ id: "office.desk-plants", theme: "office", name: "Office plants", description: "Planters along the walls.", cost: 100 });
+  expect(UPGRADES.some(x => x.id === "office.office-plants")).toBe(false);
 });
