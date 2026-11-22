@@ -7,7 +7,7 @@ import type { Character, ContextInfo, FocusPrecision, Look, Session, Sidekick, T
 import { safeDraw, THEMES, type Theme } from "../engine/theme";
 import { api } from "../net";
 import { sessionOf, tierTitleOf, unboundLabel, type ClientState } from "../state";
-import { attempt, el, jumpTo, STATE_TEXT } from "./dom";
+import { attempt, el, isJumping, jumpTo, STATE_TEXT } from "./dom";
 
 
 /** The fill as a whole percent, rounded down and capped at 100 for display. */
@@ -37,6 +37,12 @@ export function usageLine(u: UsageTotals, showCost: boolean): string {
 /** The jump button's label for a session's focus precision, or null when its terminal cannot be brought forward. */
 export function jumpLabel(precision: FocusPrecision | undefined): string | null {
   return precision === "exact" ? "Jump to terminal" : precision === "app" ? "Bring terminal to front" : null;
+}
+
+/** What the jump button shows: null when the terminal cannot be reached, else its label (while a request is pending, "Jumping…") and whether it is disabled. */
+export function jumpButton(precision: FocusPrecision | undefined, pending: boolean): { label: string; disabled: boolean } | null {
+  const label = jumpLabel(precision);
+  return label === null ? null : pending ? { label: "Jumping…", disabled: true } : { label, disabled: false };
 }
 
 /** "Sidekicks: Explore (2 min), general-purpose (40 s)"; null when none run. */
@@ -203,6 +209,12 @@ export function mount(root: HTMLElement, deps: InspectorDeps): { render(explicit
   const row = (label: string, ...value: (Node | string)[]): HTMLElement[] => [el("dt", {}, label), el("dd", {}, ...value)];
   const since = (at: number): HTMLElement => el("span", { "data-since": String(at) }, formatDuration(Date.now() - at));
 
+  function jumpEl(j: { label: string; disabled: boolean }): HTMLButtonElement {
+    const b = el("button", { type: "button", class: "primary", "data-action": "jump" }, j.label);
+    b.disabled = j.disabled;
+    return b;
+  }
+
   function nowTab(c: Character | undefined, s: Session | undefined): Node[] {
     if (s === undefined) {
       return [el("dl", {}, ...row("State", "off duty"), ...row("Last active", since(c!.lastActiveAt), " ago"))];
@@ -212,7 +224,7 @@ export function mount(root: HTMLElement, deps: InspectorDeps): { render(explicit
     if (c !== undefined) where.push(el("span", { class: "dim" }, ` · ${repoRank(c.repoXp[s.repoId] ?? 0)}`));
     const activity = [...s.activity].reverse();
     const kids = sidekickLine(s.sidekicks, Date.now());
-    const jump = jumpLabel(state.focus.get(s.key));
+    const jump = jumpButton(state.focus.get(s.key), isJumping(s.key));
     const dismiss = confirmDismiss
       ? el("div", { class: "confirm" }, "Dismiss this session? Use it when its terminal is gone; it ends as if the session had closed.",
         el("button", { type: "button", class: "danger", "data-action": "dismiss-yes" }, "Dismiss"),
@@ -226,7 +238,7 @@ export function mount(root: HTMLElement, deps: InspectorDeps): { render(explicit
         ...row("Task", s.task ?? "none yet"),
         ...row("Last", s.lastSummary ?? "nothing yet"),
         ...row("Session", since(s.startedAt))),
-      ...(jump === null ? [] : [el("div", { class: "actions" }, el("button", { type: "button", class: "primary", "data-action": "jump" }, jump))]),
+      ...(jump === null ? [] : [el("div", { class: "actions" }, jumpEl(jump))]),
       el("p", { class: "dim usage-line" }, `Tokens this session: ${usageLine(s.usage, state.settings.showCost)}`),
       ...(s.context === null ? [] : [el("p", { class: "dim context-line" }, contextLine(s.context))]),
       ...(kids === null ? [] : [el("p", { class: "dim sidekick-line" }, kids)]),
@@ -301,7 +313,7 @@ export function mount(root: HTMLElement, deps: InspectorDeps): { render(explicit
     const s = found?.s;
     switch (t.closest<HTMLElement>("[data-action]")?.dataset.action) {
       case "jump":
-        if (s !== undefined) void jumpTo(s.key, showError);
+        if (s !== undefined) void jumpTo(s.key, showError, rebuild);
         return;
       case "dismiss": confirmDismiss = true; rebuild(); return;
       case "dismiss-no": confirmDismiss = false; rebuild(); return;
@@ -390,7 +402,7 @@ export function mount(root: HTMLElement, deps: InspectorDeps): { render(explicit
     for (const b of tabs.querySelectorAll<HTMLElement>("[data-tab]")) b.setAttribute("aria-selected", String(b.dataset.tab === tab));
     renderHead(c, s);
 
-    const key = JSON.stringify([tab, c, tab === "now" ? s : null, tab === "now" && s !== undefined ? state.focus.get(s.key) : null, state.settings.showCost, draft, confirmRetire, confirmDismiss, tab === "now" || tab === "history" ? [...state.repos.keys()] : null]);
+    const key = JSON.stringify([tab, c, tab === "now" ? s : null, tab === "now" && s !== undefined ? state.focus.get(s.key) : null, tab === "now" && s !== undefined ? isJumping(s.key) : null, state.settings.showCost, draft, confirmRetire, confirmDismiss, tab === "now" || tab === "history" ? [...state.repos.keys()] : null]);
     if (key === bodyKey) return;
     bodyKey = key;
     body.replaceChildren(...(tab === "now" ? nowTab(c, s) : tab === "look" ? lookTab(c!) : tab === "history" ? historyTab(c!) : achievementsTab(c!)));

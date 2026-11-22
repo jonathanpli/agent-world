@@ -1,5 +1,5 @@
 import { expect, test } from "vitest";
-import { ackEpisode, jumpLabel, usageLine, contextLevel, contextLine, sidekickLine, formatDuration, lockLevel, renameTo, shouldAck, xpProgress } from "../../src/client/ui/inspector";
+import { ackEpisode, jumpButton, jumpLabel, usageLine, contextLevel, contextLine, sidekickLine, formatDuration, lockLevel, renameTo, shouldAck, xpProgress } from "../../src/client/ui/inspector";
 import { rosterKey, rosterRows, rosterSub } from "../../src/client/ui/roster";
 import { tickerItems } from "../../src/client/ui/ticker";
 import { applySnapshot, emptyState, tierTitleOf, unboundLabel } from "../../src/client/state";
@@ -195,4 +195,13 @@ test("jumpLabel", () => {
   expect(jumpLabel("exact")).toBe("Jump to terminal");
   expect(jumpLabel("app")).toBe("Bring terminal to front");
   expect(jumpLabel(undefined)).toBeNull();
+});
+
+test("jumpButton: hidden without a precision, labelled by precision, disabled as Jumping… while pending", () => {
+  expect(jumpButton(undefined, false)).toBeNull();
+  expect(jumpButton(undefined, true)).toBeNull();
+  expect(jumpButton("exact", false)).toEqual({ label: "Jump to terminal", disabled: false });
+  expect(jumpButton("app", false)).toEqual({ label: "Bring terminal to front", disabled: false });
+  expect(jumpButton("exact", true)).toEqual({ label: "Jumping…", disabled: true });
+  expect(jumpButton("app", true)).toEqual({ label: "Jumping…", disabled: true });
 });

@@ -28,11 +28,24 @@ export async function attempt(p: Promise<unknown>, show: (msg: string) => void):
   }
 }
 
-/** Brings a session's terminal forward; shows the server's note (if any) or the failure message, and clears it on a plain success. */
-export async function jumpTo(key: string, show: (msg: string) => void): Promise<void> {
+const jumping = new Set<string>();   // session keys with a focus request in flight; outlives any panel rebuild
+export const isJumping = (key: string): boolean => jumping.has(key);
+
+/**
+ * Brings a session's terminal forward; shows the server's note (if any) or the failure message, and clears it on a plain
+ * success. One request per session at a time: a call while one is pending does nothing. `changed` runs when the pending
+ * state starts and when it ends, so a button can redraw.
+ */
+export async function jumpTo(key: string, show: (msg: string) => void, changed: () => void = () => {}): Promise<void> {
+  if (jumping.has(key)) return;
+  jumping.add(key);
+  changed();
   try {
     show((await api.focus(key)).note ?? "");
   } catch (e) {
     show(e instanceof Error ? e.message : String(e));
+  } finally {
+    jumping.delete(key);
+    changed();
   }
 }

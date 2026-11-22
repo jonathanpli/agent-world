@@ -17,4 +17,10 @@ test("formatCost", () => {
   expect(formatCost(999)).toBe("<$0.01");
   expect(formatCost(1_234_560_000)).toBe("$1,234.56");
   expect(formatCost(10_000)).toBe("$0.01");
+  expect(formatCost(4_999)).toBe("<$0.01");
+  expect(formatCost(5_000)).toBe("$0.01");
+  expect(formatCost(-5_000)).toBe("$0.00");
+  expect(formatCost(NaN)).toBe("$0.00");
+  expect(formatCost(Infinity)).toBe("$0.00");
+  expect(formatCost(-Infinity)).toBe("$0.00");
 });

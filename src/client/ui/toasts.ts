@@ -1,8 +1,8 @@
 import { CONFIG } from "../../shared/config";
 import type { FocusPrecision, Notice, Settings } from "../../shared/types";
 import { toastFor, visibleToasts } from "../notify";
-import { el, jumpTo } from "./dom";
-import { jumpLabel } from "./inspector";
+import { el, isJumping, jumpTo } from "./dom";
+import { jumpButton } from "./inspector";
 
 type Toasts = {
   /** `precision` is the session's focus precision; a needs_input toast gets a Jump button when it is set. */
@@ -13,7 +13,7 @@ type Toasts = {
 
 /** A stack of short in-game toasts over the stage. Each dismisses itself after CONFIG.client.toastMs; clicking one runs `onClick`. */
 export function mount(root: HTMLElement): Toasts {
-  function push(text: string, cls: string, title: string, onClick: () => void, jump?: { label: string; key: string }): void {
+  function push(text: string, cls: string, title: string, onClick: () => void, jump?: { precision: FocusPrecision; key: string }): void {
     let t: HTMLElement;
     const remove = (): void => { clearTimeout(timer); t.remove(); };
     const timer = setTimeout(remove, CONFIG.client.toastMs);
@@ -23,12 +23,18 @@ export function mount(root: HTMLElement): Toasts {
     } else {
       // A button cannot hold a button: the toast is a box with the select button and the jump button side by side.
       const main = el("button", { type: "button", class: "toast-main", title }, text);
-      const go = el("button", { type: "button", class: "jump" }, jump.label);
+      const go = el("button", { type: "button", class: "jump" });
+      const draw = (): void => {
+        const b = jumpButton(jump.precision, isJumping(jump.key));
+        if (b === null) return;
+        go.textContent = b.label;
+        go.disabled = b.disabled;
+      };
+      draw();
       const note = el("span", { class: "toast-note" });
       main.addEventListener("click", () => { onClick(); remove(); });
       go.addEventListener("click", () => {
-        go.disabled = true;
-        void jumpTo(jump.key, msg => { note.textContent = msg; }).then(() => { go.disabled = false; });
+        void jumpTo(jump.key, msg => { note.textContent = msg; }, draw);
       });
       t = el("div", { class: `toast ${cls}` }, el("div", { class: "toast-row" }, main, go), note);
     }
@@ -40,8 +46,8 @@ export function mount(root: HTMLElement): Toasts {
     show(n, settings, onClick, precision) {
       const text = toastFor(n, settings);
       if (text === null) return;
-      const label = n.kind === "needs_input" && n.sessionKey !== null ? jumpLabel(precision) : null;
-      push(text, n.kind, "Show this character", onClick, label === null ? undefined : { label, key: n.sessionKey! });
+      const jump = n.kind === "needs_input" && n.sessionKey !== null && precision !== undefined ? { precision, key: n.sessionKey } : undefined;
+      push(text, n.kind, "Show this character", onClick, jump);
     },
     showText(text, onClick) { push(text, "info", "Open the recap", onClick); },
   };
