@@ -12,6 +12,8 @@ export const LOUNGE: Rect = { x: 398, y: 80, w: 70, h: 166 };
 export const AREA: Rect = { x: 4, y: 38, w: 380, h: 228 };
 export const PLACE = { label: 9, row0: 55, rowH: 48, maxW: 186, maxH: 108, gap: 8 } as const;
 const DECK: Rect = { x: 390, y: 40, w: 86, h: 226 };
+/** The deck's viewport glass, on screen 0. */
+export const DECK_WINDOW: Rect = { x: DECK.x + 5, y: DECK.y + 14, w: DECK.w - 10, h: DECK.h - 30 };
 
 const wrap = (v: number, m: number): number => ((v % m) + m) % m;
 
@@ -135,11 +137,18 @@ function hullBox(ctx: Ctx, r: Rect, wall: string): void {
   rect(ctx, r.x + 2, r.y + 2, r.w - 4, r.h - 4, wall);
 }
 
+/** The window's mullions; upgrades seen through the glass draw them again on top. */
+export function deckMullions(ctx: Ctx): void {
+  const win = DECK_WINDOW, c = SPACE.deck.frame;
+  rect(ctx, win.x + Math.floor(win.w / 2), win.y, 2, win.h, c);
+  for (const fy of [0.33, 0.66]) rect(ctx, win.x, win.y + Math.round(win.h * fy), win.w, 2, c);
+}
+
 /** The observation deck: a tall window onto the stars and the planet below, a bench and the station garden. */
 function deck(ctx: Ctx, t: number): void {
   const D = SPACE.deck;
   hullBox(ctx, DECK, D.frameD);
-  const win: Rect = { x: DECK.x + 5, y: DECK.y + 14, w: DECK.w - 10, h: DECK.h - 30 };
+  const win = DECK_WINDOW;
   rect(ctx, win.x, win.y, win.w, win.h, D.glass);
   ctx.save();
   ctx.beginPath(); ctx.rect(win.x, win.y, win.w, win.h); ctx.clip();
@@ -147,9 +156,7 @@ function deck(ctx: Ctx, t: number): void {
   moon(ctx, win.x + 18, win.y + 26, 6);
   planet(ctx, t, win.x + win.w * 0.7, win.y + win.h + 70, 120, win.x, win.x + win.w, win.y + win.h);
   ctx.restore();
-  // mullions and frame
-  rect(ctx, win.x + Math.floor(win.w / 2), win.y, 2, win.h, D.frame);
-  for (const fy of [0.33, 0.66]) rect(ctx, win.x, win.y + Math.round(win.h * fy), win.w, 2, D.frame);
+  deckMullions(ctx);
   rect(ctx, win.x - 1, win.y - 1, win.w + 2, 1, D.frame); rect(ctx, win.x - 1, win.y + win.h, win.w + 2, 1, D.frame);
   ctx.globalAlpha = 0.12;
   for (let i = 0; i < 3; i++) rect(ctx, win.x + 6 + i * 26, win.y + 4, 3, win.h - 8, "#ffffff");   // glass sheen

@@ -8,6 +8,7 @@ import { drawWorkSpot } from "./modules";
 import { SPACE } from "./palette";
 import { AREA, drawBackdrop, drawComet, drawPlace, LOUNGE, PLACE } from "./scenery";
 import { suitFor } from "./suit";
+import { drawUpgrades, upgradeSocialSpots } from "./upgrades";
 
 const S = SPACE.suit;
 
@@ -172,4 +173,6 @@ export const space: Theme = {
   drawContextGauge,
   drawCompaction,
   socialSpots,
+  drawUpgrades,
+  upgradeSocialSpots,
 };

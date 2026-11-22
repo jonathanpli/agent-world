@@ -40,6 +40,17 @@ export const SPACE = {
     o2: ["#ff7a3c", "#ffd23f", "#9cf08c", "#5cf08a"], hot: "#ff4d4d", spent: "#8a93a8", vent: "#e8f2ff" },
   bot: { c: "#dfe5ef", s: "#a3abbe", d: "#6b7389", visor: "#14223a", eye: "#6fe3ff", busy: "#ffd23f", led: "#5cf08a", puff: "#dfe6f2" },
   aura: { xhigh: "#6fe3ff", max: "#d08bff" },
+  // shop upgrades (upgrades.ts)
+  upgrades: {
+    planter: { frame: "#8a93a8", frameL: "#c4cbdb", back: "#1f2a3f", tray: "#3f4a66", lamp: "#ff6fd8", lampL: "#ffc2f0", glow: "#d86fff",
+      leaf: "#4fbf5a", leafL: "#9cf08c", leafD: "#2f8a44", berry: "#ff5a5a", water: "#6fe3ff" },
+    dispenser: { body: "#dfe5ef", bodyS: "#a3abbe", panel: "#262b42", sign: "#6fe3ff", nozzle: "#7d8599",
+      drinks: ["#ff9f1c", "#9cf08c", "#ff6fd8"], pouch: "#c9d3e0", tray: "#596079" },
+    chart: { bg: "#071a2e", grid: "#1c4a6a", frame: "#59617e", line: "#6fe3ff", star: "#ffffff", starB: "#ffe9c4", here: "#ffd23f", orbit: "#2f8fb0" },
+    dome: { glass: "#0d1d44", glassL: "#1f3b7a", rib: "#c4cbdb", ribD: "#7d8599", shine: "#dff6ff", scope: "#e3e8f1", scopeD: "#7d8599" },
+    shuttle: { hull: "#eef1f6", hullS: "#b9c0cf", nose: "#2a2f43", window: "#6fe3ff", stripe: "#ffb02e", wing: "#8a93a8", flame: ["#fff3b0", "#ffb02e"] },
+    ringed: { bands: ["#f2a0b8", "#e07a9a", "#f7c6a0", "#c96a8a", "#f2a0b8", "#b75a86"], ring: "#f3e2b8", ringL: "#fff6dc", ringD: "#b89f78", glint: "#ffffff" },
+  },
   confetti: ["#6fe3ff", "#ff6fd8", "#ffd23f", "#9cf08c", "#ffffff", "#c77dff"],
   sparkle: ["#ffe066", "#fff3b0", "#6fe3ff", "#ffffff"],
 } as const;
