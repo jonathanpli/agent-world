@@ -45,6 +45,7 @@ const code = await runService(process.argv.slice(2), {
   mkdir: p => { mkdirSync(p, { recursive: true }); },
   unlink: unlinkSync,
   exists: existsSync,
+  sleep: ms => new Promise(done => setTimeout(done, ms)),
   log: line => console.log(line),
 });
 process.exit(code);

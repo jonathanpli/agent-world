@@ -56,6 +56,9 @@ test("parsePrint", () => {
 
 test("readPlistInfo reads the node path and port", () => {
   const p = buildPlist({ ...base, env: { AGENT_WORLD_PORT: "4400" } });
-  expect(readPlistInfo(p)).toEqual({ nodePath: "/opt/node/bin/node", port: "4400" });
+  expect(readPlistInfo(p)).toEqual({ nodePath: "/opt/node/bin/node", port: "4400", path: null });
+  const q = buildPlist({ ...base, env: { PATH: "/a&b:/usr/bin" } });
+  expect(q).toContain("<string>/a&amp;b:/usr/bin</string>");
+  expect(readPlistInfo(q).path).toBe("/a&b:/usr/bin");
   expect(readPlistInfo(buildPlist(base)).port).toBeNull();
 });

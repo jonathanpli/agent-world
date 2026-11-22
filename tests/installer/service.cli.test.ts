@@ -10,12 +10,16 @@ let calls: string[];
 let out: string[];
 let portBusy: boolean;
 let buildStatus: number;
+let loaded: boolean;
+let bootstrapFails: number;
+let sleeps: number[];
+let probes: number;
 beforeEach(() => {
   dir = mkdtempSync(join(tmpdir(), "aw-service-"));
   agents = join(dir, "LaunchAgents");
   mkdirSync(join(dir, "repo/node_modules/tsx/dist"), { recursive: true });
   writeFileSync(join(dir, "repo/node_modules/tsx/dist/cli.mjs"), "");
-  calls = []; out = []; portBusy = false; buildStatus = 0;
+  calls = []; out = []; portBusy = false; buildStatus = 0; loaded = false; bootstrapFails = 0; sleeps = []; probes = 0;
 });
 afterEach(() => rmSync(dir, { recursive: true, force: true }));
 
@@ -24,8 +28,19 @@ function deps(over: Partial<ServiceDeps> = {}): ServiceDeps {
   return {
     platform: "darwin", nodeVersion: "v22.13.0", execPath: process.execPath, repoDir: join(dir, "repo"), agentsDir: agents,
     homeDir: join(dir, "home"), uid: 501, env: {},
-    run: async (file, args) => { calls.push([file, ...args].join(" ")); return { status: file === "npm" ? buildStatus : 0, stdout: "", stderr: "" }; },
-    portInUse: async () => portBusy,
+    run: async (file, args) => {
+      calls.push([file, ...args].join(" "));
+      if (file === "npm") return { status: buildStatus, stdout: "", stderr: "" };
+      if (args[0] === "print") return { status: loaded ? 0 : 113, stdout: "", stderr: "" };
+      if (args[0] === "bootout") { loaded = false; return { status: 0, stdout: "", stderr: "" }; }
+      if (args[0] === "bootstrap") {
+        if (bootstrapFails > 0) { bootstrapFails--; return { status: 5, stdout: "", stderr: "Bootstrap failed: 5: Input/output error" }; }
+        loaded = true;
+      }
+      return { status: 0, stdout: "", stderr: "" };
+    },
+    portInUse: async () => { probes++; return portBusy; },
+    sleep: async ms => { sleeps.push(ms); },
     readFile: p => readFileSync(p, "utf8"),
     writeFile: (p, t, mode) => writeFileSync(p, t, { mode }),
     mkdir: p => { mkdirSync(p, { recursive: true }); },
@@ -59,7 +74,7 @@ test("port in use is refused: no plist, no launchctl, no build", async () => {
   expect(await runService(["install"], deps())).toBe(1);
   expect(text()).toContain("4317");
   expect(existsSync(agents)).toBe(false);
-  expect(calls).toEqual([]);
+  expect(calls).toEqual(["launchctl print gui/501/com.agent-world.server"]);
 });
 
 test("the port checked is the one the service will use", async () => {
@@ -71,6 +86,7 @@ test("the port checked is the one the service will use", async () => {
 test("install builds, writes the plist (0644) then boots out and bootstraps", async () => {
   expect(await runService(["install"], deps({ env: { AGENT_WORLD_HOME: join(dir, "aw") } }))).toBe(0);
   expect(calls).toEqual([
+    "launchctl print gui/501/com.agent-world.server",
     `npm --prefix ${join(dir, "repo")} run build`,
     "launchctl bootout gui/501/com.agent-world.server",
     `launchctl bootstrap gui/501 ${plist()}`,
@@ -79,6 +95,7 @@ test("install builds, writes the plist (0644) then boots out and bootstraps", as
   const p = readFileSync(plist(), "utf8");
   expect(p).toContain(process.execPath);
   expect(p).toContain(join(dir, "aw", "server.log"));
+  expect(p).toMatch(/<key>PATH<\/key>\s*<string>\/usr\/bin:\/bin:\/usr\/sbin:\/sbin<\/string>/);
   expect(existsSync(join(dir, "aw"))).toBe(true);
 });
 
@@ -86,6 +103,7 @@ test("second install overwrites and repeats", async () => {
   await runService(["install"], deps());
   await runService(["install"], deps({ env: { AGENT_WORLD_PORT: "4400" } }));
   expect(calls.filter(c => c.includes("bootstrap"))).toHaveLength(2);
+  expect(calls.filter(c => c.includes("bootout"))).toHaveLength(2);
   expect(readdirSync(agents)).toEqual(["com.agent-world.server.plist"]);
   expect(readFileSync(plist(), "utf8")).toContain("4400");
 });
@@ -134,11 +152,19 @@ test("status when launchctl does not know the service", async () => {
 });
 
 test("--dry-run writes nothing and runs nothing", async () => {
+  portBusy = true;
   expect(await runService(["install", "--dry-run"], deps())).toBe(0);
   expect(calls).toEqual([]);
+  expect(probes).toBe(0);
   expect(existsSync(agents)).toBe(false);
   expect(text()).toContain("<plist");
-  expect(text()).toContain("would run: launchctl bootstrap gui/501");
+  const lines = out.filter(l => l.startsWith("would "));
+  expect(lines.map(l => l.replace(/ \(.*$/, ""))).toEqual([
+    `would run: npm --prefix ${join(dir, "repo")} run build`,
+    "would run: launchctl bootout gui/501/com.agent-world.server",
+    `would write: ${plist()}`,
+    `would run: launchctl bootstrap gui/501 ${plist()}`,
+  ]);
   expect(await runService(["uninstall", "--dry-run"], deps())).toBe(0);
   expect(calls).toEqual([]);
 });
@@ -149,4 +175,62 @@ test("--agents-dir overrides the agents directory; bad arguments print usage", a
   expect(existsSync(join(other, "com.agent-world.server.plist"))).toBe(true);
   expect(await runService(["bogus"], deps())).toBe(1);
   expect(await runService(["install", "--agents-dir"], deps())).toBe(1);
+});
+
+test("PATH from the installer is written; empty PATH falls back", async () => {
+  await runService(["install"], deps({ env: { PATH: "/opt/homebrew/bin:/usr/bin" } }));
+  expect(readFileSync(plist(), "utf8")).toMatch(/<key>PATH<\/key>\s*<string>\/opt\/homebrew\/bin:\/usr\/bin<\/string>/);
+  await runService(["install"], deps({ env: { PATH: "  " } }));
+  expect(readFileSync(plist(), "utf8")).toContain("<string>/usr/bin:/bin:/usr/sbin:/sbin</string>");
+  out = [];
+  await runService(["status"], deps({ env: { PATH: "x" } }));
+  expect(text()).toContain("PATH: /usr/bin:/bin:/usr/sbin:/sbin");
+});
+
+test("re-install while the service holds the port: boots out first, then the port is free", async () => {
+  await runService(["install"], deps());
+  loaded = true;
+  const held = () => loaded;
+  const d = deps();
+  d.portInUse = async () => { probes++; return held(); };
+  calls = [];
+  expect(await runService(["install"], d)).toBe(0);
+  expect(calls.indexOf("launchctl bootout gui/501/com.agent-world.server")).toBeLessThan(calls.findIndex(c => c.includes("bootstrap")));
+});
+
+test("the old process releases the port slowly: probe is polled with sleeps", async () => {
+  await runService(["install"], deps());
+  let busyFor = 3;
+  const d = deps();
+  d.portInUse = async () => busyFor-- > 0;
+  expect(await runService(["install"], d)).toBe(0);
+  expect(sleeps).toEqual([300, 300, 300]);
+});
+
+test("a foreign process after boot-out: old service stopped, nothing new installed, exit 1", async () => {
+  await runService(["install"], deps());
+  const before = readFileSync(plist(), "utf8");
+  portBusy = true;
+  sleeps = [];
+  calls = [];
+  expect(await runService(["install", "--agents-dir", agents], deps({ env: { AGENT_WORLD_PORT: "4400" } }))).toBe(1);
+  expect(text()).toContain("older Agent World service was stopped");
+  expect(text()).toContain("nothing new was installed");
+  expect(sleeps).toHaveLength(9);
+  expect(calls.some(c => c.includes("bootstrap"))).toBe(false);
+  expect(readFileSync(plist(), "utf8")).toBe(before);
+});
+
+test("bootstrap is retried: two failures then success", async () => {
+  bootstrapFails = 2;
+  expect(await runService(["install"], deps())).toBe(0);
+  expect(calls.filter(c => c.includes("bootstrap"))).toHaveLength(3);
+  expect(sleeps).toEqual([500, 500]);
+});
+
+test("bootstrap failing five times exits 1 and shows launchctl's error", async () => {
+  bootstrapFails = 99;
+  expect(await runService(["install"], deps())).toBe(1);
+  expect(calls.filter(c => c.includes("bootstrap"))).toHaveLength(5);
+  expect(text()).toContain("Input/output error");
 });

@@ -48,9 +48,11 @@ export function parsePrint(output: string): { running: boolean; pid: number | nu
   return { running, pid: running && pid !== undefined ? Number(pid) : null };
 }
 
-/** What `status` shows about an installed plist: the node it runs and the port it was given (null when not set). */
-export function readPlistInfo(plist: string): { nodePath: string | null; port: string | null } {
+/** What `status` shows about an installed plist: the node it runs, the port it was given and its PATH (null when not set). */
+export function readPlistInfo(plist: string): { nodePath: string | null; port: string | null; path: string | null } {
   const args = /<key>ProgramArguments<\/key>\s*<array>\s*<string>([^<]*)<\/string>/.exec(plist)?.[1];
   const port = /<key>AGENT_WORLD_PORT<\/key>\s*<string>([^<]*)<\/string>/.exec(plist)?.[1];
-  return { nodePath: args === undefined ? null : unescapeXml(args), port: port === undefined ? null : unescapeXml(port) };
+  const path = /<key>PATH<\/key>\s*<string>([^<]*)<\/string>/.exec(plist)?.[1];
+  const un = (v: string | undefined): string | null => (v === undefined ? null : unescapeXml(v));
+  return { nodePath: un(args), port: un(port), path: un(path) };
 }
