@@ -67,6 +67,10 @@ export const CONFIG = {
     sidekickChance: 0.15, sidekickMax: 3, sidekickTools: [2, 5], sidekickGapMs: [1_000, 3_000],
     sidekickTypes: ["Explore", "general-purpose", "Plan"],
     toolFailChance: 0.08,
+    momentChance: 1 / 15,                                                      // a main-thread tool is a git or test command (commits and test runs common, PRs rare)
+    turnInput: [3, 120], turnOutput: [200, 2_500], turnCacheWrite1h: [500, 4_000],   // one usage event per main-thread tool; cacheRead is the context size
+    subagentModel: "claude-haiku-5-5", subagentInput: [20, 400], subagentOutput: [1_000, 8_000],
+    subagentCacheRead: [20_000, 90_000], subagentCacheWrite: [2_000, 12_000],  // the Agent tool's own event carries these totals
   },
   client: {
     noticeMax: 50,

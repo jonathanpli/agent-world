@@ -1,5 +1,5 @@
 import { CONFIG } from "../shared/config";
-import type { AgentEvent, Compaction, Effort, Tier, ToolKind } from "../shared/types";
+import type { AgentEvent, Compaction, Effort, MomentKind, Tier, ToolKind, UsageDelta } from "../shared/types";
 
 export type Demo = { step(): void };     // call once per simulated second
 
@@ -26,6 +26,16 @@ const TOOLS: DemoTool[] = [
   { tool: "Glob", summary: "Glob **/*.yaml", toolKind: "read" },
   { tool: "WebSearch", summary: "Search for the library changelog", toolKind: "web" },
   { tool: "TodoWrite", summary: "Update the task list", toolKind: "other" },
+];
+/** Shell commands that make a git or test moment; weight sets how often each is drawn. */
+type DemoMoment = { moment: MomentKind; weight: number; commands: string[]; subjects?: string[] };
+const MOMENTS: DemoMoment[] = [
+  { moment: "commit", weight: 4, commands: ["git commit -m"], subjects: ["Fix flaky checkout test", "Add pagination to orders endpoint", "Refactor auth middleware", "Add user preferences migration", "Handle offline mode in sync service"] },
+  { moment: "tests_passed", weight: 4, commands: ["npm test", "npx vitest run", "pytest -q"] },
+  { moment: "tests_failed", weight: 3, commands: ["npm test", "npx vitest run", "pytest -q"] },
+  { moment: "push", weight: 2, commands: ["git push origin HEAD"] },
+  { moment: "pr_opened", weight: 1, commands: ["gh pr create --fill"] },
+  { moment: "pr_merged", weight: 1, commands: ["gh pr merge 12 --squash"] },
 ];
 const SIDEKICK_TOOLS = TOOLS.filter(t => t.toolKind === "read" || t.toolKind === "web" || t.toolKind === "other");
 const SUMMARIES = ["Done, tests pass", "Implemented and verified", "Fixed, added a regression test", "Refactor complete"];
@@ -67,8 +77,40 @@ export function createDemo(opts: { emit: (ev: AgentEvent) => void; rng: () => nu
   const sendTool = (s: Sim, t: DemoTool, agent?: Sidekick): void => {
     const detail: Record<string, string> = { tool: t.tool, summary: t.summary, toolKind: t.toolKind };
     if (agent) { detail.agentId = agent.id; detail.agentType = agent.type; }
-    send(s, "tool", rng() < cfg.toolFailChance ? { detail, failed: true } : { detail });
+    const extra: Partial<AgentEvent> = rng() < cfg.toolFailChance ? { detail, failed: true } : { detail };
+    if (t.toolKind === "delegate" && !agent) {            // the Agent tool's own event carries the subagent's totals
+      extra.usage = { input: int(cfg.subagentInput), output: int(cfg.subagentOutput), cacheRead: int(cfg.subagentCacheRead), cacheWrite: int(cfg.subagentCacheWrite), cacheWrite1h: 0 };
+      extra.usageModel = cfg.subagentModel; extra.sidekick = true;
+    }
+    send(s, "tool", extra);
   };
+
+  function pickWeighted(xs: DemoMoment[]): DemoMoment {
+    let r = rng() * xs.reduce((n, x) => n + x.weight, 0);
+    for (const x of xs) { if ((r -= x.weight) < 0) return x; }
+    return xs[xs.length - 1]!;
+  }
+
+  // occasionally a main-thread tool is a git or test command instead; tests_failed is the only moment on a failed event
+  function sendMoment(s: Sim): void {
+    const m = pickWeighted(MOMENTS);
+    const command = pick(m.commands);
+    const detail: Record<string, string> = { tool: "Bash", toolKind: "shell", summary: `Bash ${command}` };
+    if (m.subjects) {
+      const subject = pick(m.subjects);
+      detail.summary = `Bash ${command} "${subject}"`; detail.momentText = subject.slice(0, 80);
+    }
+    send(s, "tool", m.moment === "tests_failed" ? { detail, moment: m.moment, failed: true } : { detail, moment: m.moment });
+  }
+  const sendMainTool = (s: Sim): void => { if (rng() < cfg.momentChance) sendMoment(s); else sendTool(s, pick(TOOLS)); };
+
+  // one usage event per main-thread turn: the prompt is mostly cache reads of the current context
+  function sendUsage(s: Sim): void {
+    const usage: UsageDelta = { input: int(cfg.turnInput), output: int(cfg.turnOutput), cacheRead: s.tokens, cacheWrite: 0, cacheWrite1h: int(cfg.turnCacheWrite1h) };
+    const extra: Partial<AgentEvent> = { usage, usageModel: MODELS[s.tier] };
+    if (s.tier === 1 && usage.input + usage.cacheRead + usage.cacheWrite + usage.cacheWrite1h > CONFIG.usage.longPromptTokens) extra.longPrompt = true;
+    send(s, "usage", extra);
+  }
 
   // every context event lists all boundaries so far; the first one (empty list) is the session's history
   function sendContext(s: Sim): void {
@@ -106,8 +148,9 @@ export function createDemo(opts: { emit: (ev: AgentEvent) => void; rng: () => nu
         s.toolsLeft = int(cfg.toolsPerTask); s.phase = "tool"; s.nextAt = t + between(cfg.toolGapMs);
         break;
       case "tool":
-        sendTool(s, pick(TOOLS));
+        sendMainTool(s);
         sendContext(s);
+        sendUsage(s);
         if (s.sidekicks.length < cfg.sidekickMax && rng() < cfg.sidekickChance) startSidekick(s, t);
         if (--s.toolsLeft > 0) { s.nextAt = t + between(cfg.toolGapMs); break; }
         if (rng() < cfg.needsInputChance) {
@@ -116,8 +159,9 @@ export function createDemo(opts: { emit: (ev: AgentEvent) => void; rng: () => nu
         } else { s.phase = "finish"; s.nextAt = t + between(cfg.toolGapMs); }
         break;
       case "resolve":
-        sendTool(s, pick(TOOLS));
+        sendMainTool(s);
         sendContext(s);
+        sendUsage(s);
         s.phase = "finish"; s.nextAt = t + between(cfg.toolGapMs);
         break;
       case "finish": {

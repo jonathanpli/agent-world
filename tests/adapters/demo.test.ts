@@ -10,7 +10,7 @@ test("simulator drives a world for an hour without breaking it", () => {
   const w = newWorld(); const live = () => w.snapshot(t, false).sessions.length;
   const demo = createDemo({ rng: mulberry32(7), now: () => t, emit: e => { seen.add(e.kind); if (e.tier) tiers.add(e.tier); if (e.effort) efforts.add(e.effort); w.apply(e); } });
   for (let i = 0; i < 3600; i++) { t = i * 1000; demo.step(); if (i > 60) { expect(live()).toBeGreaterThanOrEqual(3); expect(live()).toBeLessThanOrEqual(6); } }
-  expect([...seen].sort()).toEqual(["context","model_change","needs_input","prompt","session_end","session_start","sub_end","sub_start","task_done","tool"]);
+  expect([...seen].sort()).toEqual(["context","model_change","needs_input","prompt","session_end","session_start","sub_end","sub_start","task_done","tool","usage"]);
   expect(tiers.size).toBe(4); expect(efforts.size).toBe(5);
   expect(w.snapshot(t, false).repos.length).toBe(4);
 });
@@ -57,4 +57,36 @@ test("every demo tool carries the kind the Claude Code adapter gives that tool (
   for (let i = 0; i < 1800; i++) { t = i * 1000; demo.step(); }
   expect(tools.some(e => e.detail?.tool === "Glob")).toBe(true);
   for (const e of tools) expect(e.detail?.toolKind).toBe(toolKindFor(e.detail!.tool!));
+});
+
+test("demo simulates token usage, subagent totals and git moments", () => {
+  let t = 0; const evs: AgentEvent[] = []; const models = new Map<string, string>();
+  const demo = createDemo({ rng: mulberry32(7), now: () => t, emit: e => { if (e.model) models.set(e.sessionId, e.model); evs.push(e); } });
+  for (let i = 0; i < 900; i++) { t = i * 1000; demo.step(); }
+
+  const usages = evs.filter(e => e.kind === "usage");
+  expect(usages.length).toBeGreaterThan(20);
+  for (const e of usages) {
+    const u = e.usage!;
+    for (const n of Object.values(u)) expect(Number.isInteger(n) && n >= 0).toBe(true);
+    expect(u.output).toBeGreaterThanOrEqual(200); expect(u.cacheRead).toBeGreaterThan(0); expect(u.cacheWrite).toBe(0);
+    expect(e.usageModel).toBeTruthy(); expect(e.sidekick).toBeUndefined();
+    if (e.longPrompt) { expect(e.usageModel).toContain("haiku"); expect(u.input + u.cacheRead + u.cacheWrite + u.cacheWrite1h).toBeGreaterThan(100_000); }
+  }
+  expect(usages.some(e => e.usageModel === models.get(e.sessionId))).toBe(true);
+
+  const delegates = evs.filter(e => e.kind === "tool" && e.detail?.toolKind === "delegate" && !e.detail.agentId);
+  expect(delegates.length).toBeGreaterThan(0);
+  for (const e of delegates) { expect(e.sidekick).toBe(true); expect(e.usage!.output).toBeGreaterThan(0); expect(e.usageModel).toBe("claude-haiku-5-5"); }
+
+  const tools = evs.filter(e => e.kind === "tool");
+  const moments = tools.filter(e => e.moment);
+  expect(new Set(moments.map(e => e.moment))).toEqual(new Set(["commit", "push", "pr_opened", "pr_merged", "tests_passed", "tests_failed"]));
+  expect(moments.length / tools.length).toBeLessThan(0.15);
+  for (const e of moments) {
+    expect(e.detail?.summary).toBeTruthy();
+    expect(e.failed === true).toBe(e.moment === "tests_failed");
+    if (e.moment === "commit") { expect(e.detail!.momentText!.length).toBeGreaterThan(0); expect(e.detail!.momentText!.length).toBeLessThanOrEqual(80); expect(e.detail!.summary).toContain("git commit -m"); }
+    else expect(e.detail!.momentText).toBeUndefined();
+  }
 });
