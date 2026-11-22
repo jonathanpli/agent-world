@@ -15,9 +15,9 @@ export function notificationFor(n: Notice, settings: Settings): { title: string;
   return { title: `${n.characterName} ${verb}${where}`, body: n.text };
 }
 
-/** The in-game toast text for a notice: needs_input, done and context_low under the same toggles as `notificationFor`, level_up always, else null. */
+/** The in-game toast text for a notice: needs_input, done and context_low under the same toggles as `notificationFor`, level_up and pr_merged moments always, else null. */
 export function toastFor(n: Notice, settings: Settings): string | null {
-  if (n.kind === "level_up") return n.text;
+  if (n.kind === "level_up" || (n.kind === "moment" && n.moment === "pr_merged")) return n.text;
   return notificationFor(n, settings) === null ? null : n.text;
 }
 

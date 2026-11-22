@@ -1,12 +1,12 @@
 import { expect, test } from "vitest";
-import { ackEpisode, contextLevel, contextLine, sidekickLine, formatDuration, lockLevel, renameTo, shouldAck, xpProgress } from "../../src/client/ui/inspector";
+import { ackEpisode, jumpLabel, usageLine, contextLevel, contextLine, sidekickLine, formatDuration, lockLevel, renameTo, shouldAck, xpProgress } from "../../src/client/ui/inspector";
 import { rosterKey, rosterRows, rosterSub } from "../../src/client/ui/roster";
 import { tickerItems } from "../../src/client/ui/ticker";
 import { applySnapshot, emptyState, tierTitleOf, unboundLabel } from "../../src/client/state";
 import { plateText } from "../../src/client/engine/overlay";
 import { HATS, unlocked } from "../../src/shared/cosmetics";
 import { CONFIG } from "../../src/shared/config";
-import type { ContextInfo } from "../../src/shared/types";
+import type { ContextInfo, UsageTotals } from "../../src/shared/types";
 import { applyDeltas } from "../../src/client/state";
 import { char, notice, repo, session, snap } from "../helpers/clientFixtures";
 
@@ -181,4 +181,18 @@ test("applyDeltas ignores credit and learned_limit deltas", () => {
 test("tickerItems includes context_low notices", () => {
   const low = { ...notice("1"), kind: "context_low" as const, text: "Bo's context is 82% full" };
   expect(tickerItems([low])).toEqual(["Bo's context is 82% full"]);
+});
+
+const usage = (over: Partial<UsageTotals> = {}): UsageTotals => ({ input: 1_200_000, output: 48_000, cacheRead: 9_400_000, cacheWrite: 5, cacheWrite1h: 5, costMicros: 3_104_000, ...over });
+
+test("usageLine shows in, out, cached (cache reads) and the estimated cost", () => {
+  expect(usageLine(usage(), true)).toBe("1.2M in · 48k out · 9.4M cached · est. $3.10");
+  expect(usageLine(usage(), false)).toBe("1.2M in · 48k out · 9.4M cached");
+  expect(usageLine(usage({ costMicros: 0 }), true)).toBe("1.2M in · 48k out · 9.4M cached · est. $0.00");
+});
+
+test("jumpLabel", () => {
+  expect(jumpLabel("exact")).toBe("Jump to terminal");
+  expect(jumpLabel("app")).toBe("Bring terminal to front");
+  expect(jumpLabel(undefined)).toBeNull();
 });

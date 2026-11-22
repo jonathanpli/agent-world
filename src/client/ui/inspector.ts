@@ -2,12 +2,12 @@ import { ACHIEVEMENTS } from "../../core/achievements";
 import { levelForXp, repoRank, xpForLevel } from "../../core/levels";
 import { CONFIG } from "../../shared/config";
 import { ACCESSORIES, BODY_COLORS, HAIR_COLORS, HAIR_STYLES, HATS, SKIN_TONES, unlocked } from "../../shared/cosmetics";
-import { formatTokens } from "../../shared/format";
-import type { Character, ContextInfo, Look, Session, Sidekick, Tier } from "../../shared/types";
+import { formatCost, formatTokens } from "../../shared/format";
+import type { Character, ContextInfo, FocusPrecision, Look, Session, Sidekick, Tier, UsageTotals } from "../../shared/types";
 import { safeDraw, THEMES, type Theme } from "../engine/theme";
 import { api } from "../net";
 import { sessionOf, tierTitleOf, unboundLabel, type ClientState } from "../state";
-import { attempt, el, STATE_TEXT } from "./dom";
+import { attempt, el, jumpTo, STATE_TEXT } from "./dom";
 
 
 /** The fill as a whole percent, rounded down and capped at 100 for display. */
@@ -26,6 +26,17 @@ export function contextLine(c: ContextInfo): string {
   const detail = c.estimated ? `${contextPct(c)}%, estimated` : `${contextPct(c)}%`;
   const base = `Context ${formatTokens(c.tokens)} of ${formatTokens(c.limit)} (${detail})`;
   return c.compactions === 0 ? base : `${base} · ${c.compactions} ${c.compactions === 1 ? "compaction" : "compactions"} this session`;
+}
+
+/** "1.2M in · 48k out · 9.4M cached · est. $3.10" (cached = cache reads); the cost part is left off unless `showCost`. */
+export function usageLine(u: UsageTotals, showCost: boolean): string {
+  const base = `${formatTokens(u.input)} in · ${formatTokens(u.output)} out · ${formatTokens(u.cacheRead)} cached`;
+  return showCost ? `${base} · est. ${formatCost(u.costMicros)}` : base;
+}
+
+/** The jump button's label for a session's focus precision, or null when its terminal cannot be brought forward. */
+export function jumpLabel(precision: FocusPrecision | undefined): string | null {
+  return precision === "exact" ? "Jump to terminal" : precision === "app" ? "Bring terminal to front" : null;
 }
 
 /** "Sidekicks: Explore (2 min), general-purpose (40 s)"; null when none run. */
@@ -201,6 +212,7 @@ export function mount(root: HTMLElement, deps: InspectorDeps): { render(explicit
     if (c !== undefined) where.push(el("span", { class: "dim" }, ` · ${repoRank(c.repoXp[s.repoId] ?? 0)}`));
     const activity = [...s.activity].reverse();
     const kids = sidekickLine(s.sidekicks, Date.now());
+    const jump = jumpLabel(state.focus.get(s.key));
     const dismiss = confirmDismiss
       ? el("div", { class: "confirm" }, "Dismiss this session? Use it when its terminal is gone; it ends as if the session had closed.",
         el("button", { type: "button", class: "danger", "data-action": "dismiss-yes" }, "Dismiss"),
@@ -214,6 +226,8 @@ export function mount(root: HTMLElement, deps: InspectorDeps): { render(explicit
         ...row("Task", s.task ?? "none yet"),
         ...row("Last", s.lastSummary ?? "nothing yet"),
         ...row("Session", since(s.startedAt))),
+      ...(jump === null ? [] : [el("div", { class: "actions" }, el("button", { type: "button", class: "primary", "data-action": "jump" }, jump))]),
+      el("p", { class: "dim usage-line" }, `Tokens this session: ${usageLine(s.usage, state.settings.showCost)}`),
       ...(s.context === null ? [] : [el("p", { class: "dim context-line" }, contextLine(s.context))]),
       ...(kids === null ? [] : [el("p", { class: "dim sidekick-line" }, kids)]),
       el("h3", {}, "Activity"),
@@ -286,6 +300,9 @@ export function mount(root: HTMLElement, deps: InspectorDeps): { render(explicit
     const found = resolve();
     const s = found?.s;
     switch (t.closest<HTMLElement>("[data-action]")?.dataset.action) {
+      case "jump":
+        if (s !== undefined) void jumpTo(s.key, showError);
+        return;
       case "dismiss": confirmDismiss = true; rebuild(); return;
       case "dismiss-no": confirmDismiss = false; rebuild(); return;
       case "dismiss-yes": confirmDismiss = false; if (s !== undefined) void call(api.dismiss(s.key)); rebuild(); return;
@@ -324,6 +341,7 @@ export function mount(root: HTMLElement, deps: InspectorDeps): { render(explicit
           el("thead", {}, el("tr", {}, el("th", {}, "Repo"), el("th", {}, "XP"), el("th", {}, "Rank"))),
           el("tbody", {}, ...repos.map(([id, xp]) => el("tr", {},
             el("td", {}, state.repos.get(id)?.name ?? "unknown repo"), el("td", { class: "num" }, String(xp)), el("td", {}, repoRank(xp)))))),
+      el("p", { class: "dim usage-line" }, `Lifetime tokens: ${usageLine(c.usage, state.settings.showCost)}`),
       el("h3", {}, "Stats"),
       el("dl", {},
         ...row("Total XP", String(c.xp)),
@@ -372,7 +390,7 @@ export function mount(root: HTMLElement, deps: InspectorDeps): { render(explicit
     for (const b of tabs.querySelectorAll<HTMLElement>("[data-tab]")) b.setAttribute("aria-selected", String(b.dataset.tab === tab));
     renderHead(c, s);
 
-    const key = JSON.stringify([tab, c, tab === "now" ? s : null, draft, confirmRetire, confirmDismiss, tab === "now" || tab === "history" ? [...state.repos.keys()] : null]);
+    const key = JSON.stringify([tab, c, tab === "now" ? s : null, tab === "now" && s !== undefined ? state.focus.get(s.key) : null, state.settings.showCost, draft, confirmRetire, confirmDismiss, tab === "now" || tab === "history" ? [...state.repos.keys()] : null]);
     if (key === bodyKey) return;
     bodyKey = key;
     body.replaceChildren(...(tab === "now" ? nowTab(c, s) : tab === "look" ? lookTab(c!) : tab === "history" ? historyTab(c!) : achievementsTab(c!)));

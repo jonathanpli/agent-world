@@ -1,5 +1,5 @@
 import { expect, test } from "vitest";
-import { formatTokens } from "../../src/shared/format";
+import { formatCost, formatTokens } from "../../src/shared/format";
 
 test("formatTokens", () => {
   expect(formatTokens(950)).toBe("950");
@@ -9,4 +9,12 @@ test("formatTokens", () => {
   expect(formatTokens(1_000_000)).toBe("1M");
   expect(formatTokens(999_499)).toBe("999k");
   expect(formatTokens(999_600)).toBe("1M");             // never "1000k"
+});
+
+test("formatCost", () => {
+  expect(formatCost(0)).toBe("$0.00");
+  expect(formatCost(3_104_000)).toBe("$3.10");
+  expect(formatCost(999)).toBe("<$0.01");
+  expect(formatCost(1_234_560_000)).toBe("$1,234.56");
+  expect(formatCost(10_000)).toBe("$0.01");
 });

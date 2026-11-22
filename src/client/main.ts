@@ -152,7 +152,8 @@ connect({
       const actorId = n.characterId ?? n.sessionKey;
       const show = (): void => { if (actorId !== null) select(actorId); };
       deliver(n, state.settings, show);
-      toasts.show(n, state.settings, show);
+      toasts.show(n, state.settings, show, n.sessionKey === null ? undefined : state.focus.get(n.sessionKey));
+      if (n.kind === "moment" && (n.moment === "commit" || n.moment === "pr_merged") && actorId !== null) engine.burst("celebrate", actorId);   // Task 11 adds the colours
       if (n.kind === "level_up" && n.characterId !== null) engine.burst("levelUp", n.characterId);
       if ((n.kind === "done" || n.kind === "level_up") && actorId !== null) engine.react(actorId);
     }

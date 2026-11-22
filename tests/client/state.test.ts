@@ -95,3 +95,11 @@ test("the focus map comes with the snapshot and follows focus deltas", () => {
   applySnapshot(s, snap());
   expect(s.focus).toEqual(new Map());
 });
+
+test("the shop comes with the snapshot and follows shop deltas", () => {
+  const s = emptyState();
+  applySnapshot(s, snap({ shop: { coins: 7, owned: [] } }));
+  expect(s.shop.coins).toBe(7);
+  applyDeltas(s, [{ type: "shop", shop: { coins: 3, owned: [] } }]);
+  expect(s.shop.coins).toBe(3);
+});

@@ -335,3 +335,11 @@ table.history .num { text-align: right; font-variant-numeric: tabular-nums; }
   #layout { --roster-w: 180px; }
   #inspector { width: 280px; }
 }
+
+/* ---- jump button, token lines, toast with a jump button ---- */
+.toast-row { display: flex; align-items: center; gap: 10px; }
+.toast-main { background: none; border: 0; padding: 0; color: inherit; font: inherit; text-align: left; cursor: pointer; }
+.toast-note { display: block; margin-top: 4px; color: var(--warn); font-size: 12px; }
+.toast-note:empty { display: none; }
+.toast .jump { flex: none; font: inherit; font-size: 12px; padding: 2px 8px; cursor: pointer; }
+.usage-line { margin: 6px 0; font-size: 12px; font-variant-numeric: tabular-nums; }

@@ -23,7 +23,7 @@ export function mount(root: HTMLDialogElement, deps: { state: ClientState }): { 
   const theme = el("select", {});
   for (const t of THEMES) theme.add(new Option(t.name, t.id));
   const check = (): HTMLInputElement => el("input", { type: "checkbox" });
-  const needsInput = check(), done = check(), sound = check(), ctxNotify = check();
+  const needsInput = check(), done = check(), sound = check(), ctxNotify = check(), showCost = check();
   const cap = el("input", { type: "number" });
   cap.min = "1";
   cap.max = String(CONFIG.rosterCapMax);
@@ -54,6 +54,7 @@ export function mount(root: HTMLDialogElement, deps: { state: ClientState }): { 
     field("Context running low", ctxNotify),
     field("Warn at context %", warn, `${CONFIG.context.warnMin} to ${CONFIG.context.warnMax}.`),
     field("Context limit override", el("span", { class: "inline" }, limit, useEstimate), `Tokens, at least ${CONFIG.context.overrideMin.toLocaleString("en-US")}. Leave empty to estimate it from each model.`),
+    field("Show estimated cost", showCost, "Dollar figures are estimates from public API prices."),
     field("Roster cap", cap, `Named characters, 1 to ${CONFIG.rosterCapMax}. Past it, sessions show as temps.`),
     el("div", { class: "notify-row" }, enable, permText),
     error,
@@ -68,6 +69,7 @@ export function mount(root: HTMLDialogElement, deps: { state: ClientState }): { 
   done.addEventListener("change", () => put({ notifyDone: done.checked }));
   sound.addEventListener("change", () => put({ sound: sound.checked }));
   ctxNotify.addEventListener("change", () => put({ notifyContext: ctxNotify.checked }));
+  showCost.addEventListener("change", () => put({ showCost: showCost.checked }));
   warn.addEventListener("change", () => put({ contextWarnPct: Number(warn.value) }));
   limit.addEventListener("change", () => put({ contextLimitOverride: limit.value.trim() === "" ? null : Number(limit.value) }));
   useEstimate.addEventListener("click", () => { limit.value = ""; put({ contextLimitOverride: null }); });
@@ -86,6 +88,7 @@ export function mount(root: HTMLDialogElement, deps: { state: ClientState }): { 
     done.checked = s.notifyDone;
     sound.checked = s.sound;
     ctxNotify.checked = s.notifyContext;
+    showCost.checked = s.showCost;
     if (document.activeElement !== warn) warn.value = String(s.contextWarnPct);
     if (document.activeElement !== limit) limit.value = s.contextLimitOverride === null ? "" : String(s.contextLimitOverride);
     useEstimate.disabled = s.contextLimitOverride === null;

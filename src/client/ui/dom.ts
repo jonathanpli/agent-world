@@ -1,4 +1,5 @@
 import type { CharState } from "../../shared/types";
+import { api } from "../net";
 
 type Child = Node | string | null | undefined | false;
 
@@ -24,5 +25,14 @@ export async function attempt(p: Promise<unknown>, show: (msg: string) => void):
   } catch (e) {
     show(e instanceof Error ? e.message : String(e));
     return false;
+  }
+}
+
+/** Brings a session's terminal forward; shows the server's note (if any) or the failure message, and clears it on a plain success. */
+export async function jumpTo(key: string, show: (msg: string) => void): Promise<void> {
+  try {
+    show((await api.focus(key)).note ?? "");
+  } catch (e) {
+    show(e instanceof Error ? e.message : String(e));
   }
 }

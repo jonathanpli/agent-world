@@ -1,6 +1,6 @@
 import { expect, test } from "vitest";
 import { compactionText, applyDeltas, applySnapshot, emptyState } from "../../src/client/state";
-import { nudgeText, recapExtras, recapHeadline, recapIsEmpty, shouldNudge, spriteBounds, streakText } from "../../src/client/ui/recap";
+import { nudgeText, recapMoments, recapUsage, recapExtras, recapHeadline, recapIsEmpty, shouldNudge, spriteBounds, streakText } from "../../src/client/ui/recap";
 import { tickerItems } from "../../src/client/ui/ticker";
 import type { Recap, RecapTotals } from "../../src/shared/types";
 import { char, repo, session, snap } from "../helpers/clientFixtures";
@@ -85,4 +85,20 @@ test("spriteBounds: the smallest box holding every visible pixel, or null for a 
   expect(spriteBounds(img(32, 40, []))).toBeNull();
   expect(spriteBounds(img(32, 40, [[10, 8], [21, 35], [15, 20]]))).toEqual({ x: 10, y: 8, w: 12, h: 28 });
   expect(spriteBounds(img(32, 40, [[0, 0]]))).toEqual({ x: 0, y: 0, w: 1, h: 1 });
+});
+
+test("recapMoments lists non-zero git and test counts, null when all zero", () => {
+  expect(recapMoments(recap())).toBeNull();
+  expect(recapMoments(recap({ commits: 12, prsMerged: 2, testRuns: 31, testFails: 4 }))).toBe("12 commits · 2 PRs merged · 31 test runs, 4 failed");
+  expect(recapMoments(recap({ commits: 1, prsMerged: 1, testRuns: 1 }))).toBe("1 commit · 1 PR merged · 1 test run");
+  expect(recapMoments(recap({ prsOpened: 3 }))).toBe("3 PRs opened");
+  expect(recapMoments(recap({ testRuns: 2, testFails: 2 }))).toBe("2 test runs, 2 failed");
+});
+
+test("recapUsage sums every token kind and respects showCost", () => {
+  expect(recapUsage(recap(), true)).toBeNull();
+  const r = recap({ input: 10_000_000, output: 400_000, cacheRead: 8_000_000, cacheWrite: 0, cacheWrite1h: 0, costMicros: 41_200_000 });
+  expect(recapUsage(r, true)).toBe("18.4M tokens · est. $41.20");
+  expect(recapUsage(r, false)).toBe("18.4M tokens");
+  expect(recapUsage(recap({ cacheWrite: 500, cacheWrite1h: 500 }), true)).toBe("1k tokens · est. $0.00");
 });

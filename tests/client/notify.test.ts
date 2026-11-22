@@ -2,7 +2,7 @@ import { afterEach, expect, test, vi } from "vitest";
 import { attentionCount, deliver, notificationFor, tabTitle, toastFor, visibleToasts } from "../../src/client/notify";
 import { applySnapshot, emptyState } from "../../src/client/state";
 import { CONFIG } from "../../src/shared/config";
-import type { Notice, NoticeKind, Settings } from "../../src/shared/types";
+import type { MomentKind, Notice, NoticeKind, Settings } from "../../src/shared/types";
 import { char, repo, session, snap } from "../helpers/clientFixtures";
 
 const on: Settings = { ...CONFIG.defaultSettings, notifyNeedsInput: true, notifyDone: true, sound: false };
@@ -162,4 +162,11 @@ test("attentionCount ignores sessions that are only warned", () => {
   applySnapshot(s, snap({ characters: [char("a")], repos: [repo("r")], sessions: [
     session("k", "a", "r", { attention: false, context: { tokens: 190_000, peak: 190_000, limit: 200_000, estimated: true, compactions: 0, warned: true, seen: [] } })] }));
   expect(attentionCount(s)).toBe(0);
+});
+
+test("moments: only pr_merged toasts, none notify", () => {
+  const m = (moment: MomentKind): Notice => ({ ...n("moment"), moment, text: "Bo did a thing" });
+  for (const k of ["commit", "push", "pr_opened", "tests_passed", "tests_failed"] as const) expect(toastFor(m(k), on)).toBeNull();
+  expect(toastFor(m("pr_merged"), on)).toBe("Bo did a thing");
+  for (const k of ["commit", "pr_merged", "tests_failed"] as const) expect(notificationFor(m(k), on)).toBeNull();
 });

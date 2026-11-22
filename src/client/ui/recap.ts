@@ -1,3 +1,4 @@
+import { formatCost, formatTokens } from "../../shared/format";
 import type { Recap } from "../../shared/types";
 import { api } from "../net";
 import type { ClientState } from "../state";
@@ -19,6 +20,24 @@ export function recapExtras(r: Recap): string[] {
   if (t.sidekicks > 0) out.push(count(t.sidekicks, "sidekick", "sidekicks"));
   if (t.failures > 0) out.push(count(t.failures, "failed tool", "failed tools"));
   return out;
+}
+
+/** "12 commits · 2 PRs merged · 31 test runs, 4 failed"; zero parts are left out; null when there are none. */
+export function recapMoments(r: Recap): string | null {
+  const t = r.totals, out: string[] = [];
+  if (t.commits > 0) out.push(count(t.commits, "commit", "commits"));
+  if (t.prsOpened > 0) out.push(count(t.prsOpened, "PR opened", "PRs opened"));
+  if (t.prsMerged > 0) out.push(count(t.prsMerged, "PR merged", "PRs merged"));
+  if (t.testRuns > 0) out.push(`${count(t.testRuns, "test run", "test runs")}${t.testFails > 0 ? `, ${t.testFails} failed` : ""}`);
+  return out.length === 0 ? null : out.join(" · ");
+}
+
+/** "18.4M tokens · est. $41.20" (the cost part only when `showCost`); null when no tokens were used. */
+export function recapUsage(r: Recap, showCost: boolean): string | null {
+  const t = r.totals;
+  const tokens = t.input + t.output + t.cacheRead + t.cacheWrite + t.cacheWrite1h;
+  if (tokens === 0) return null;
+  return `${formatTokens(tokens)} tokens${showCost ? ` · est. ${formatCost(t.costMicros)}` : ""}`;
 }
 
 export function streakText(n: number): string | null {
@@ -113,6 +132,9 @@ export function mount(root: HTMLDialogElement, deps: { state: ClientState; drawS
     }
     const extras = recapExtras(r);
     if (extras.length > 0) rows.push(el("p", { class: "dim" }, extras.join(" · ")));
+    const moments = recapMoments(r), tokens = recapUsage(r, deps.state.settings.showCost);
+    if (moments !== null) rows.push(el("p", { class: "dim recap-moments" }, moments));
+    if (tokens !== null) rows.push(el("p", { class: "dim recap-usage" }, tokens));
     const streak = streakText(r.streak);
     if (streak !== null) rows.push(el("p", { class: "recap-streak" }, streak));
     body.replaceChildren(...rows.filter((x): x is Node => x !== null));
