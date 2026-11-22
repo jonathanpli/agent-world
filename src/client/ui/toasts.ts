@@ -1,6 +1,5 @@
-import { CONFIG } from "../../shared/config";
 import type { FocusPrecision, Notice, Settings } from "../../shared/types";
-import { toastFor, visibleToasts } from "../notify";
+import { toastFor, toastRemoveAt, visibleToasts } from "../notify";
 import { el, isJumping, jumpTo } from "./dom";
 import { jumpButton } from "./inspector";
 
@@ -11,12 +10,23 @@ type Toasts = {
   showText(text: string, onClick: () => void): void;
 };
 
-/** A stack of short in-game toasts over the stage. Each dismisses itself after CONFIG.client.toastMs; clicking one runs `onClick`. */
+/**
+ * A stack of short in-game toasts over the stage. Each dismisses itself after CONFIG.client.toastMs (later while its Jump
+ * is pending, and until a jump's note has been up that long: `toastRemoveAt`); clicking one runs `onClick`.
+ */
 export function mount(root: HTMLElement): Toasts {
   function push(text: string, cls: string, title: string, onClick: () => void, jump?: { precision: FocusPrecision; key: string }): void {
     let t: HTMLElement;
+    const life = { shownAt: Date.now(), jumpPending: false, noteAt: null as number | null };
+    let timer: ReturnType<typeof setTimeout> | undefined;
     const remove = (): void => { clearTimeout(timer); t.remove(); };
-    const timer = setTimeout(remove, CONFIG.client.toastMs);
+    /** (Re)arms the self-removal for the toast's current state; a pending jump arms nothing until it settles. */
+    const schedule = (): void => {
+      clearTimeout(timer);
+      const at = toastRemoveAt(life);
+      if (at !== null) timer = setTimeout(remove, Math.max(0, at - Date.now()));
+    };
+    schedule();
     if (jump === undefined) {
       t = el("button", { type: "button", class: `toast ${cls}`, title }, text);   // text node, never HTML
       t.addEventListener("click", () => { onClick(); remove(); });
@@ -34,7 +44,11 @@ export function mount(root: HTMLElement): Toasts {
       const note = el("span", { class: "toast-note" });
       main.addEventListener("click", () => { onClick(); remove(); });
       go.addEventListener("click", () => {
-        void jumpTo(jump.key, msg => { note.textContent = msg; }, draw);
+        if (isJumping(jump.key)) return;
+        life.jumpPending = true;
+        schedule();
+        void jumpTo(jump.key, msg => { note.textContent = msg; if (msg !== "") life.noteAt = Date.now(); }, draw)
+          .finally(() => { life.jumpPending = false; schedule(); });
       });
       t = el("div", { class: `toast ${cls}` }, el("div", { class: "toast-row" }, main, go), note);
     }

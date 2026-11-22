@@ -22,10 +22,15 @@ export function connect(handlers: Handlers): void {
   open();
 }
 
+/** Every write carries this header: the server refuses API writes without it, so another page cannot send one. */
+const WRITE_HEADER = { "x-agent-world": "1" };
+
 async function call<T>(method: string, path: string, body?: unknown): Promise<T> {
+  const headers: Record<string, string> = method === "GET" ? {} : { ...WRITE_HEADER };
+  if (body !== undefined) headers["content-type"] = "application/json";
   const res = await fetch(path, {
     method,
-    headers: body === undefined ? {} : { "content-type": "application/json" },
+    headers,
     body: body === undefined ? undefined : JSON.stringify(body),
   });
   if (!res.ok) {

@@ -1,6 +1,6 @@
 import { expect, test } from "vitest";
 import { UPGRADES } from "../../src/shared/shop";
-import { buyDecision, formatCoins, shopItems } from "../../src/client/ui/shop";
+import { buyButton, buyDecision, formatCoins, shopItems } from "../../src/client/ui/shop";
 
 test("formatCoins groups thousands", () => {
   expect(formatCoins(950)).toBe("950");
@@ -39,4 +39,19 @@ test("a click only confirms and buys a buyable item", () => {
   expect(buyDecision(owned)).toBeNull();
   expect(buyDecision(poor)).toBeNull();
   expect(buyDecision(buyable)).toEqual({ id: "office.coffee-machine", prompt: "Buy Coffee machine for 250 coins?" });
+});
+
+test("while a buy is in flight its button reads Buying…, is disabled, and a click on it does nothing", () => {
+  const [plants, coffee] = shopItems("office", { coins: 500, owned: [] });
+  const pending = new Set(["office.desk-plants"]);
+  expect(buyButton(plants!, pending)).toEqual({ label: "Buying…", disabled: true });
+  expect(buyDecision(plants!, pending)).toBeNull();
+  // another item is unaffected
+  expect(buyButton(coffee!, pending)).toEqual({ label: "Buy", disabled: false });
+  expect(buyDecision(coffee!, pending)).toEqual({ id: "office.coffee-machine", prompt: "Buy Coffee machine for 250 coins?" });
+  // settled: back to normal
+  expect(buyButton(plants!, new Set())).toEqual({ label: "Buy", disabled: false });
+  expect(buyDecision(plants!, new Set())).toMatchObject({ id: "office.desk-plants" });
+  // a poor item stays disabled
+  expect(buyButton(shopItems("office", { coins: 0, owned: [] })[0]!, new Set())).toEqual({ label: "Buy", disabled: true });
 });

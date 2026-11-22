@@ -26,6 +26,16 @@ export function visibleToasts<T>(all: T[]): T[] {
   return all.slice(-CONFIG.client.toastMax);
 }
 
+/**
+ * When a toast may remove itself: CONFIG.client.toastMs after it appeared, never while its Jump request is pending (null),
+ * and once a jump's note or error is shown (`noteAt`), not before that note has been up for toastMs too.
+ */
+export function toastRemoveAt(t: { shownAt: number; jumpPending: boolean; noteAt: number | null }): number | null {
+  if (t.jumpPending) return null;
+  const own = t.shownAt + CONFIG.client.toastMs;
+  return t.noteAt === null ? own : Math.max(own, t.noteAt + CONFIG.client.toastMs);
+}
+
 /** Sessions with attention. */
 export function attentionCount(s: ClientState): number {
   let k = 0;

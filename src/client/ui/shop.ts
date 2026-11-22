@@ -19,10 +19,19 @@ export function shopItems(theme: string, shop: ShopState): ShopItemView[] {
   });
 }
 
-/** What a click on an item's Buy button does: ask this question, then buy this id; null when nothing can be bought. */
-export function buyDecision(item: ShopItemView): { id: string; prompt: string } | null {
-  if (item.status !== "buyable") return null;
+/**
+ * What a click on an item's Buy button does: ask this question, then buy this id; null when nothing can be bought, or
+ * while a buy of this item is still in flight (`pending` holds those ids).
+ */
+export function buyDecision(item: ShopItemView, pending: ReadonlySet<string> = new Set()): { id: string; prompt: string } | null {
+  if (item.status !== "buyable" || pending.has(item.upgrade.id)) return null;
   return { id: item.upgrade.id, prompt: `Buy ${item.upgrade.name} for ${formatCoins(item.upgrade.cost)} coins?` };
+}
+
+/** How an item's Buy button looks: "Buying…" and disabled while its request is in flight, disabled when too poor. */
+export function buyButton(item: ShopItemView, pending: ReadonlySet<string>): { label: string; disabled: boolean } {
+  if (pending.has(item.upgrade.id)) return { label: "Buying…", disabled: true };
+  return { label: "Buy", disabled: item.status !== "buyable" };
 }
 
 /** The coin counter text for the top bar. */
@@ -45,10 +54,16 @@ export function mount(root: HTMLDialogElement, deps: { state: ClientState }): { 
     tabs, list, error,
     el("div", { class: "actions" }, closeBtn)));
 
+  /** Ids whose buy request has not settled yet. */
+  const pending = new Set<string>();
+
   function buy(item: ShopItemView): void {
-    const d = buyDecision(item);
-    if (d === null || !confirm(d.prompt)) return;
-    void attempt(api.buy(d.id).then(s => { state.shop = s; render(); }), msg => { error.textContent = msg; });
+    const d = buyDecision(item, pending);
+    if (d === null || !confirm(d.prompt) || pending.has(d.id)) return;
+    pending.add(d.id);
+    render();
+    void attempt(api.buy(d.id).then(s => { state.shop = s; }), msg => { error.textContent = msg; })
+      .finally(() => { pending.delete(d.id); render(); });
   }
 
   function render(): void {
@@ -65,8 +80,9 @@ export function mount(root: HTMLDialogElement, deps: { state: ClientState }): { 
       let action: HTMLElement;
       if (item.status === "owned") action = el("span", { class: "shop-owned" }, "✓ Owned");
       else {
-        const b = el("button", { type: "button", class: "shop-buy" }, "Buy");
-        b.disabled = item.status === "poor";
+        const look = buyButton(item, pending);
+        const b = el("button", { type: "button", class: "shop-buy" }, look.label);
+        b.disabled = look.disabled;
         if (item.reason !== null) b.title = item.reason;
         b.addEventListener("click", () => buy(item));
         action = b;

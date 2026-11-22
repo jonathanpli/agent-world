@@ -1,5 +1,5 @@
 import { afterEach, expect, test, vi } from "vitest";
-import { attentionCount, deliver, notificationFor, tabTitle, toastFor, visibleToasts } from "../../src/client/notify";
+import { attentionCount, deliver, notificationFor, tabTitle, toastFor, toastRemoveAt, visibleToasts } from "../../src/client/notify";
 import { applySnapshot, emptyState } from "../../src/client/state";
 import { CONFIG } from "../../src/shared/config";
 import type { MomentKind, Notice, NoticeKind, Settings } from "../../src/shared/types";
@@ -169,4 +169,16 @@ test("moments: only pr_merged toasts, none notify", () => {
   for (const k of ["commit", "push", "pr_opened", "tests_passed", "tests_failed"] as const) expect(toastFor(m(k), on)).toBeNull();
   expect(toastFor(m("pr_merged"), on)).toBe("Bo did a thing");
   for (const k of ["commit", "pr_merged", "tests_failed"] as const) expect(notificationFor(m(k), on)).toBeNull();
+});
+
+test("a toast goes after toastMs; never while its Jump is pending; and a jump's note stays at least toastMs once shown", () => {
+  const ms = CONFIG.client.toastMs;
+  expect(toastRemoveAt({ shownAt: 1000, jumpPending: false, noteAt: null })).toBe(1000 + ms);
+  expect(toastRemoveAt({ shownAt: 1000, jumpPending: true, noteAt: null })).toBeNull();
+  expect(toastRemoveAt({ shownAt: 1000, jumpPending: true, noteAt: 2000 })).toBeNull();      // a new jump after an earlier note
+  // settled with a note or an error 5 s in: it stays toastMs from then, not from when the toast appeared
+  expect(toastRemoveAt({ shownAt: 1000, jumpPending: false, noteAt: 1000 + ms - 1 })).toBe(1000 + 2 * ms - 1);
+  expect(toastRemoveAt({ shownAt: 1000, jumpPending: false, noteAt: 1001 })).toBe(1001 + ms);
+  // settled after toastMs with nothing to say (a jump with no note): due at its own time, which has passed
+  expect(toastRemoveAt({ shownAt: 1000, jumpPending: false, noteAt: null })).toBe(1000 + ms);
 });
