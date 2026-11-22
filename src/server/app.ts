@@ -11,6 +11,7 @@ import type { AgentEvent, Delta, Look, Settings } from "../shared/types";
 import { isDay, localDay } from "./recap";
 import { createRepoResolver } from "./repoResolver";
 import type { Store } from "./store";
+import { asTerminalInfo, sameTerminal, terminalFromHeaders, type TerminalInfo } from "./terminal";
 import { readTranscript as readTranscriptFile, type TranscriptInfo } from "./transcript";
 import { readUsage as readUsageFile, type UsageCursor } from "./usageReader";
 
@@ -111,7 +112,13 @@ export function createApp(opts: AppOptions): App {
   const contextReads = new Map<string, ContextReads>();
   /** sessionKey → where its transcript's usage reading stands; a session without one is read for the first time next. */
   const usageCursors = new Map<string, UsageCursor>();
-  for (const [key, { cursor }] of store.loadServerState()) if (cursor !== null) usageCursors.set(key, cursor);
+  /** sessionKey → the terminal its hook last reported. Server-side only: never in a snapshot or a delta. */
+  const terminals = new Map<string, TerminalInfo>();
+  for (const [key, { cursor, terminal }] of store.loadServerState()) {
+    if (cursor !== null) usageCursors.set(key, cursor);
+    const t = asTerminalInfo(terminal);
+    if (t !== null) terminals.set(key, t);
+  }
   let closed = false;
   const streams = new Set<ServerResponse>();
   let queue: Promise<void> = Promise.resolve();
@@ -123,6 +130,7 @@ export function createApp(opts: AppOptions): App {
       if (d.type === "session") sessionWantsModel.set(d.session.key, wantsModel(d.session));
       else if (d.type === "session_removed") {
         sessionWantsModel.delete(d.key); modelTries.delete(d.key); forgetContextReads(d.key); usageCursors.delete(d.key);
+        terminals.delete(d.key);
       }
     }
     // credit, learned limits and purchases are for the store only: browsers do not use them
@@ -236,6 +244,13 @@ export function createApp(opts: AppOptions): App {
     });
   }
 
+  /** Keeps (and saves) the terminal a hook reported for a session the world knows, when it differs from the one kept. */
+  function rememberTerminal(key: string, terminal: TerminalInfo): void {
+    if (closed || !sessionWantsModel.has(key) || sameTerminal(terminals.get(key), terminal)) return;   // the map holds every known session
+    terminals.set(key, terminal);
+    store.saveTerminal(key, terminal);
+  }
+
   function tick(): void {
     const t = now();
     commit(world.tick(t));
@@ -261,6 +276,9 @@ export function createApp(opts: AppOptions): App {
         ? { sessionId: raw.session_id, path: raw.transcript_path, repoPath: typeof raw.cwd === "string" ? raw.cwd : "" } : null;
       if (events.length === 0 && readTrigger === null) { console.warn(`agent-world: ingest payload from "${source}" not recognized`); return; }
       await Promise.all(events.map(inject));
+      // the terminal belongs to the payload's session, once its events are applied (an unknown session gets nothing)
+      const terminal = terminalFromHeaders(req.headers);
+      if (terminal !== null && isRecord(raw) && nonEmpty(raw.session_id)) rememberTerminal(`${source}:${raw.session_id}`, terminal);
       if (readTrigger !== null) scheduleContextRead(source, readTrigger.sessionId, readTrigger.path, readTrigger.repoPath);
     } finally {
       sendStatus(res, 204);

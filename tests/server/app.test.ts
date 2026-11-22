@@ -810,3 +810,85 @@ test("a shop delta reaches the stream when XP is earned", async () => {
   expect(seen.some(d => d.type === "purchase")).toBe(false);
   expect((await snapshot(base)).shop.coins).toBeGreaterThan(0);
 });
+
+// --- terminal identifiers (Task 5) ---
+
+const TERMINAL = { bundleId: "com.googlecode.iterm2", itermSession: "w0t1p0:zq7Distinctive-4F3A", tty: "ttys012", tmuxSocket: "/tmp/tmux-501/zq7sock" };
+const TERMINAL_HEADERS = {
+  "X-AW-Bundle-Id": TERMINAL.bundleId, "X-AW-Iterm-Session": TERMINAL.itermSession, "X-AW-Tty": TERMINAL.tty, "X-AW-Tmux-Socket": TERMINAL.tmuxSocket,
+};
+const hook = (base: string, name: string, headers: Record<string, string> = TERMINAL_HEADERS) =>
+  fetch(`${base}/ingest/claude-code`, { method: "POST", body: fx(name), headers });
+
+/** A store whose saveTerminal calls are recorded. */
+function terminalStore(path = ":memory:"): { store: Store; saved: [string, unknown][] } {
+  const inner = openStore(path);
+  const saved: [string, unknown][] = [];
+  return { saved, store: { ...inner, saveTerminal: (k, t) => { saved.push([k, structuredClone(t)]); inner.saveTerminal(k, t); } } };
+}
+
+test("a hook request for a known session saves its terminal once, and again only when it changes", async () => {
+  const { store, saved } = terminalStore();
+  const { base } = await start({ store });
+  vi.spyOn(console, "warn").mockImplementation(() => {});
+  await hook(base, "SubagentStart");                                    // unknown session, an event that creates none
+  expect(saved).toEqual([]);
+  expect((await snapshot(base)).sessions).toEqual([]);
+  expect(store.loadServerState().size).toBe(0);
+  await hook(base, "SessionStart");
+  expect(saved).toEqual([[SESSION_KEY, TERMINAL]]);
+  await hook(base, "UserPromptSubmit");                                 // same terminal: nothing to save
+  await hook(base, "PostToolUse", {});                                  // no headers: the known terminal stays
+  await hook(base, "PostToolUse", { "X-AW-Tty": "$(touch x)" });       // nothing valid: as good as no headers
+  expect(saved).toHaveLength(1);
+  await hook(base, "Stop", { ...TERMINAL_HEADERS, "X-AW-Tty": "ttys013" });
+  expect(saved).toEqual([[SESSION_KEY, TERMINAL], [SESSION_KEY, { ...TERMINAL, tty: "ttys013" }]]);
+  expect(store.loadServerState().get(SESSION_KEY)?.terminal).toEqual({ ...TERMINAL, tty: "ttys013" });
+});
+
+test("terminal values never reach the snapshot or the stream", async () => {
+  const { base } = await start({ readTranscript: byModel(async () => "claude-sonnet-4-5") });
+  const next = await openStream(base);
+  const texts = [JSON.stringify((await next()).data)];
+  await hook(base, "SessionStart");
+  await hook(base, "UserPromptSubmit");
+  texts.push(JSON.stringify((await next()).data), JSON.stringify((await next()).data));
+  const later = await openStream(base);
+  texts.push(JSON.stringify((await later()).data));
+  const res = await fetch(`${base}/api/snapshot`);
+  texts.push(await res.text());
+  expect(texts.at(-1)).toContain(SESSION_KEY.split(":")[1]);           // the session is there
+  for (const t of texts) for (const v of [...Object.values(TERMINAL), "zq7"]) expect(t).not.toContain(v);
+  expect((await snapshot(base)).focus).toEqual({});
+});
+
+test("a restarted app reloads the terminal; removing the session forgets it", async () => {
+  const path = `${mkdtempSync(join(tmpdir(), "aw-app-"))}/w.db`;
+  const first = terminalStore(path);
+  const a = await start({ store: first.store });
+  await hook(a.base, "SessionStart");
+  expect(first.saved).toHaveLength(1);
+  const second = terminalStore(path);
+  const b = await start({ store: second.store });
+  await hook(b.base, "UserPromptSubmit");                               // the reloaded terminal is the same: not saved again
+  expect(second.saved).toEqual([]);
+  expect((await send(b.base, "POST", `/api/sessions/${encodeURIComponent(SESSION_KEY)}/dismiss`)).status).toBe(204);
+  expect(second.store.loadServerState().has(SESSION_KEY)).toBe(false);
+  await hook(b.base, "SessionStart");                                   // a new session with the same terminal is saved afresh
+  expect(second.saved).toEqual([[SESSION_KEY, TERMINAL]]);
+});
+
+test("a stored terminal is validated again on reload", async () => {
+  const path = `${mkdtempSync(join(tmpdir(), "aw-app-"))}/w.db`;
+  const first = terminalStore(path);
+  const a = await start({ store: first.store });
+  await hook(a.base, "SessionStart");
+  first.store.saveTerminal(SESSION_KEY, { ...TERMINAL, tty: "$(touch x)", extra: "zz" });   // as if the row had been tampered with
+  const second = terminalStore(path);
+  const b = await start({ store: second.store });
+  const { "X-AW-Tty": _h, ...restHeaders } = TERMINAL_HEADERS;
+  await hook(b.base, "UserPromptSubmit", restHeaders);                  // what survived validation: nothing new to save
+  expect(second.saved).toEqual([]);
+  await hook(b.base, "Stop");
+  expect(second.saved).toEqual([[SESSION_KEY, TERMINAL]]);
+});

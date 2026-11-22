@@ -236,6 +236,7 @@ export function openStore(path: string): Store {
           case "learned_limit": saveLearnedLimit(d.model, d.limit); break;
           case "purchase": insertPurchase.run(d.id, d.boughtAt); break;
           case "shop": break;
+          case "focus": break;
         }
       }
       db.exec("COMMIT");

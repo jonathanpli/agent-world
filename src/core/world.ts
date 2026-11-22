@@ -625,6 +625,7 @@ export function createWorld(init: WorldInit, deps: WorldDeps): World {
     return clone({
       serverTime: now, demo,
       characters: [...characters.values()], repos: [...repos.values()], sessions: [...sessions.values()], settings, shop: shopState(),
+      focus: {},                     // the core never sees terminals: the app fills this in
     });
   }
 

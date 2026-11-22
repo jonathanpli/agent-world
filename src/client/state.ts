@@ -1,11 +1,12 @@
 import { CONFIG } from "../shared/config";
 import type { ShopState } from "../shared/shop";
-import type { Character, Delta, Notice, Repo, Session, Settings, Snapshot, Tier } from "../shared/types";
+import type { Character, Delta, FocusPrecision, Notice, Repo, Session, Settings, Snapshot, Tier } from "../shared/types";
 
 /** The browser's mirror of the server's world, fed by the SSE snapshot and deltas. */
 export type ClientState = {
   characters: Map<string, Character>; repos: Map<string, Repo>; sessions: Map<string, Session>;
   settings: Settings; shop: ShopState; demo: boolean; connected: boolean;
+  focus: Map<string, FocusPrecision>;   // session key → how its terminal can be brought to the front; absent = it cannot
   notices: Notice[];                 // newest last, at most CONFIG.client.noticeMax
   notes: { at: number; text: string }[];   // client-only ticker lines (no toast, no attention), newest last, same cap
 };
@@ -13,7 +14,8 @@ export type ClientState = {
 export function emptyState(): ClientState {
   return {
     characters: new Map(), repos: new Map(), sessions: new Map(),
-    settings: { ...CONFIG.defaultSettings }, shop: { coins: 0, owned: [] }, demo: false, connected: false, notices: [], notes: [],
+    settings: { ...CONFIG.defaultSettings }, shop: { coins: 0, owned: [] }, demo: false, connected: false,
+    focus: new Map(), notices: [], notes: [],
   };
 }
 
@@ -24,6 +26,7 @@ export function applySnapshot(s: ClientState, snap: Snapshot): void {
   s.sessions = new Map(snap.sessions.map(x => [x.key, x]));
   s.settings = snap.settings;
   s.shop = snap.shop;
+  s.focus = new Map(Object.entries(snap.focus));
   s.demo = snap.demo;
 }
 
@@ -63,6 +66,7 @@ export function applyDeltas(s: ClientState, deltas: Delta[]): Notice[] {
       case "learned_limit": break;
       case "purchase": break;
       case "shop": s.shop = d.shop; break;
+      case "focus": if (d.precision === null) s.focus.delete(d.key); else s.focus.set(d.key, d.precision); break;
     }
   }
   const excess = s.notices.length - CONFIG.client.noticeMax;

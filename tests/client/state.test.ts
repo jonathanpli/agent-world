@@ -84,3 +84,14 @@ test("activeRepos only lists repos with sessions, in stable order", () => {
   applyDeltas(s, [{ type: "session_removed", key: "k1" }]);
   expect(activeRepos(s).map(r => r.id)).toEqual(["a", "b"]);
 });
+
+test("the focus map comes with the snapshot and follows focus deltas", () => {
+  const s = emptyState();
+  expect(s.focus).toEqual(new Map());
+  applySnapshot(s, snap({ focus: { k1: "exact" } }));
+  expect(s.focus).toEqual(new Map([["k1", "exact"]]));
+  expect(applyDeltas(s, [{ type: "focus", key: "k2", precision: "app" }, { type: "focus", key: "k1", precision: null }])).toEqual([]);
+  expect(s.focus).toEqual(new Map([["k2", "app"]]));
+  applySnapshot(s, snap());
+  expect(s.focus).toEqual(new Map());
+});

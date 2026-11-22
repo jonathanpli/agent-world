@@ -94,8 +94,15 @@ export type Delta =
   /** The wallet or the owned upgrades changed. */
   | { type: "shop"; shop: ShopState }
   /** An upgrade was bought: for the store only, browsers get the `shop` delta. */
-  | { type: "purchase"; id: string; boughtAt: number };
-export type Snapshot = { serverTime: number; demo: boolean; characters: Character[]; repos: Repo[]; sessions: Session[]; settings: Settings; shop: ShopState };
+  | { type: "purchase"; id: string; boughtAt: number }
+  /** How precisely a session's terminal can be brought to the front changed; null = it cannot. */
+  | { type: "focus"; key: string; precision: FocusPrecision | null };
+/** How precisely the server can bring a session's terminal to the front: its own tab or pane, or only its app. */
+export type FocusPrecision = "exact" | "app";
+export type Snapshot = {
+  serverTime: number; demo: boolean; characters: Character[]; repos: Repo[]; sessions: Session[]; settings: Settings; shop: ShopState;
+  focus: Record<string, FocusPrecision>;   // by session key; a session not listed cannot be focused
+};
 
 export type RecapTotals = { tasks: number; tools: number; failures: number; xp: number; levels: number; compactions: number; sidekicks: number } & MomentStats & UsageTotals;
 export type Recap = {
