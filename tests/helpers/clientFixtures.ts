@@ -27,7 +27,7 @@ export function session(key: string, characterId: string | null, repoId: string,
 }
 
 export function snap(over: Partial<Snapshot> = {}): Snapshot {
-  return { serverTime: 0, demo: false, characters: [], repos: [], sessions: [], settings: { ...CONFIG.defaultSettings }, ...over };
+  return { serverTime: 0, demo: false, characters: [], repos: [], sessions: [], settings: { ...CONFIG.defaultSettings }, shop: { coins: 0, owned: [] }, ...over };
 }
 
 export function notice(id: string): Notice {

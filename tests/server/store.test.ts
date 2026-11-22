@@ -389,3 +389,15 @@ test("a version-4 database with data opens, loads with zero usage and recaps wit
   expect(store.loadServerState()).toEqual(new Map());
   store.close();
 });
+
+test("purchases round-trip through the store in purchase order and a repeat is ignored", () => {
+  const store = openStore(":memory:");
+  const shop = { coins: 0, owned: [] };
+  store.persist([{ type: "purchase", id: "space.drink-dispenser", boughtAt: 20 }, { type: "shop", shop }]);
+  store.persist([{ type: "purchase", id: "office.desk-plants", boughtAt: 10 }]);
+  store.persist([{ type: "purchase", id: "office.desk-plants", boughtAt: 99 }]);
+  const init = store.load();
+  expect(init.purchases).toEqual([{ id: "office.desk-plants", boughtAt: 10 }, { id: "space.drink-dispenser", boughtAt: 20 }]);
+  expect(createWorld(init, deps()).snapshot(0, false).shop.owned).toEqual(["office.desk-plants", "space.drink-dispenser"]);
+  store.close();
+});

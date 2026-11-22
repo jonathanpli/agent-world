@@ -6,6 +6,7 @@ import { ADAPTERS } from "../adapters";
 import { tierForModel } from "../adapters/claudeCode";
 import { createWorld } from "../core/world";
 import { CONFIG } from "../shared/config";
+import { ShopError } from "../shared/shop";
 import type { AgentEvent, Delta, Look, Settings } from "../shared/types";
 import { isDay, localDay } from "./recap";
 import { createRepoResolver } from "./repoResolver";
@@ -124,8 +125,8 @@ export function createApp(opts: AppOptions): App {
         sessionWantsModel.delete(d.key); modelTries.delete(d.key); forgetContextReads(d.key); usageCursors.delete(d.key);
       }
     }
-    // credit and learned limits are for the store only: browsers do not use them
-    const shown = deltas.filter(d => d.type !== "credit" && d.type !== "learned_limit");
+    // credit, learned limits and purchases are for the store only: browsers do not use them
+    const shown = deltas.filter(d => d.type !== "credit" && d.type !== "learned_limit" && d.type !== "purchase");
     if (shown.length === 0) return;
     const msg = `event: delta\ndata: ${JSON.stringify(shown)}\n\n`;
     for (const s of streams) s.write(msg);
@@ -309,6 +310,20 @@ export function createApp(opts: AppOptions): App {
     sendJson(res, 200, d?.type === "settings" ? d.settings : null);
   }
 
+  async function buyUpgrade(req: IncomingMessage, res: ServerResponse): Promise<void> {
+    const body = await jsonBody(req, res);
+    if (body === null) return;
+    if (!nonEmpty(body.id)) { sendJson(res, 400, { error: "id must be a non-empty string" }); return; }
+    let deltas: Delta[];
+    try { deltas = world.buy(body.id, now()); } catch (e) {
+      if (!(e instanceof ShopError)) throw e;
+      sendJson(res, e.code === "unknown" ? 400 : 409, { error: e.message });
+      return;
+    }
+    commit(deltas);
+    sendJson(res, 200, world.snapshot(now(), demo).shop);
+  }
+
   async function serveStatic(res: ServerResponse, pathname: string): Promise<void> {
     if (opts.staticDir === undefined) { sendStatus(res, 404); return; }
     const root = resolve(opts.staticDir);
@@ -366,6 +381,7 @@ export function createApp(opts: AppOptions): App {
       commit(deltas);
       return sendStatus(res, 204);
     }
+    if (method === "POST" && path === "/api/shop/buy") return buyUpgrade(req, res);
     if (method === "PUT" && path === "/api/settings") return putSettings(req, res);
     if (method === "GET") return serveStatic(res, path);
     sendStatus(res, 404);

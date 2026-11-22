@@ -18,7 +18,7 @@ export function deps(): WorldDeps {
 
 export function newWorld(init: Partial<WorldInit> = {}): World {
   return createWorld(
-    { characters: [], repos: [], sessions: [], settings: { ...CONFIG.defaultSettings }, learnedLimits: {}, ...init },
+    { characters: [], repos: [], sessions: [], settings: { ...CONFIG.defaultSettings }, learnedLimits: {}, purchases: [], ...init },
     deps(),
   );
 }

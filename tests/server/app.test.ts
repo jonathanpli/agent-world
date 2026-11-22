@@ -6,6 +6,8 @@ import type { AddressInfo } from "node:net";
 import { Readable } from "node:stream";
 import { afterEach, expect, test, vi } from "vitest";
 import { createApp, type App, type AppOptions } from "../../src/server/app";
+import { createWorld } from "../../src/core/world";
+import { deps, ev } from "../helpers/events";
 import { openStore, type Store } from "../../src/server/store";
 import type { TranscriptInfo } from "../../src/server/transcript";
 import type { readUsage, UsageBatch, UsageCursor } from "../../src/server/usageReader";
@@ -768,4 +770,43 @@ test("a restarted app continues from the saved cursor; a removed session's curso
   expect(second.rig.calls.map(c => c.cursor)).toEqual([{ offset: 100, ids: ["m1"] }]);
   expect((await send(second.base, "POST", `/api/sessions/${encodeURIComponent(SESSION_KEY)}/dismiss`)).status).toBe(204);
   expect(second.store.loadServerState().has(SESSION_KEY)).toBe(false);
+});
+
+test("POST /api/shop/buy: 200 with the new state, 400 unknown or bad body, 409 owned or poor, 403 foreign", async () => {
+  const store = openStore(":memory:");
+  const w = createWorld(store.load(), deps());
+  store.persist(w.apply(ev("session_start")));
+  const rich = { ...w.snapshot(0, false).characters[0]!, xp: 600 };
+  store.persist([{ type: "character", character: rich }]);
+  const { base } = await start({ store });
+  const next = await openStream(base);
+  await next();                                         // snapshot
+  expect((await snapshot(base)).shop).toEqual({ coins: 600, owned: [] });
+  expect((await raw(base, "POST", "/api/shop/buy", { origin: "https://evil.example" })).status).toBe(403);
+  expect((await send(base, "POST", "/api/shop/buy", { id: "office.nope" })).status).toBe(400);
+  expect((await send(base, "POST", "/api/shop/buy", { id: 7 })).status).toBe(400);
+  expect((await send(base, "POST", "/api/shop/buy", [])).status).toBe(400);
+  expect((await send(base, "POST", "/api/shop/buy", { id: "office.wall-art" })).status).toBe(200);   // 500
+  expect((await next()).data).toEqual([{ type: "shop", shop: { coins: 100, owned: ["office.wall-art"] } }]);
+  const again = await send(base, "POST", "/api/shop/buy", { id: "office.wall-art" });
+  expect(again.status).toBe(409);
+  expect(((await again.json()) as { error: string }).error).toMatch(/owned/);
+  expect((await send(base, "POST", "/api/shop/buy", { id: "office.coffee-machine" })).status).toBe(409);   // 250 > 100
+  const ok = await send(base, "POST", "/api/shop/buy", { id: "office.desk-plants" });
+  expect(ok.status).toBe(200);
+  expect(await ok.json()).toEqual({ coins: 0, owned: ["office.wall-art", "office.desk-plants"] });
+  expect(store.load().purchases.map(p => p.id).sort()).toEqual(["office.desk-plants", "office.wall-art"]);
+  expect((await snapshot(base)).shop).toEqual({ coins: 0, owned: ["office.wall-art", "office.desk-plants"] });
+});
+
+test("a shop delta reaches the stream when XP is earned", async () => {
+  const { base } = await start({ readTranscript: byModel(async () => "claude-sonnet-4-5") });
+  const next = await openStream(base);
+  await next();
+  await ingest(base, fx("SessionStart"));
+  await ingest(base, fx("UserPromptSubmit"));
+  const seen: Delta[] = [];
+  while (!seen.some(d => d.type === "shop")) seen.push(...(await next()).data as Delta[]);
+  expect(seen.some(d => d.type === "purchase")).toBe(false);
+  expect((await snapshot(base)).shop.coins).toBeGreaterThan(0);
 });

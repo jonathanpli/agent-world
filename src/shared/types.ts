@@ -1,3 +1,4 @@
+import type { ShopState } from "./shop";
 export type Tier = 1 | 2 | 3 | 4;
 export type Effort = "low" | "medium" | "high" | "xhigh" | "max";
 export type CharState = "working" | "needs_input" | "done" | "idle" | "off_duty";
@@ -89,8 +90,12 @@ export type Delta =
       tasks: number; tools: number; failures: number; xp: number; levels: number; compactions: number; sidekicks: number;
       commits: number; prsOpened: number; prsMerged: number; testRuns: number; testFails: number; usage: UsageTotals }
   /** An automatic compaction raised the learned context limit of `model` (tokens). */
-  | { type: "learned_limit"; model: string; limit: number };
-export type Snapshot = { serverTime: number; demo: boolean; characters: Character[]; repos: Repo[]; sessions: Session[]; settings: Settings };
+  | { type: "learned_limit"; model: string; limit: number }
+  /** The wallet or the owned upgrades changed. */
+  | { type: "shop"; shop: ShopState }
+  /** An upgrade was bought: for the store only, browsers get the `shop` delta. */
+  | { type: "purchase"; id: string; boughtAt: number };
+export type Snapshot = { serverTime: number; demo: boolean; characters: Character[]; repos: Repo[]; sessions: Session[]; settings: Settings; shop: ShopState };
 
 export type RecapTotals = { tasks: number; tools: number; failures: number; xp: number; levels: number; compactions: number; sidekicks: number } & MomentStats & UsageTotals;
 export type Recap = {

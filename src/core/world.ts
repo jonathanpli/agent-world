@@ -2,6 +2,7 @@ import { CONFIG } from "../shared/config";
 import { isValidLook } from "../shared/cosmetics";
 import { formatTokens } from "../shared/format";
 import { costMicros } from "../shared/prices";
+import { ShopError, UPGRADES, type ShopState } from "../shared/shop";
 import type {
   AgentEvent, Character, ContextInfo, Delta, Look, MomentKind, MomentStats, Notice, NoticeKind, Repo, Session, Settings, Snapshot, Tier, ToolKind,
   UsageTotals,
@@ -14,6 +15,7 @@ import { randomLook, randomName } from "./names";
 export type WorldInit = {
   characters: Character[]; repos: Repo[]; sessions: Session[]; settings: Settings;
   learnedLimits: Record<string, number>;     // model id → context limit in tokens, learned from automatic compactions
+  purchases: { id: string; boughtAt: number }[];
 };
 export type WorldDeps = { rng: () => number; newId: () => string };
 export type World = {
@@ -23,6 +25,7 @@ export type World = {
   end(sessionKey: string, at: number): Delta[];   // dismisses a session as SessionEnd would; [] for an unknown key
   updateCharacter(id: string, patch: { name?: string; look?: Look; retired?: boolean }): Delta[];  // throws Error on invalid patch
   updateSettings(patch: Partial<Settings>): Delta[];                                               // throws Error on invalid patch
+  buy(id: string, at: number): Delta[];   // throws ShopError ("unknown" | "owned" | "poor"); emits purchase and shop deltas
   snapshot(now: number, demo: boolean): Snapshot;
 };
 
@@ -71,6 +74,7 @@ export function createWorld(init: WorldInit, deps: WorldDeps): World {
   const sessions = new Map(init.sessions.map(s => [s.key, clone(s)]));
   let settings: Settings = clone(init.settings);
   const learnedLimits = new Map(Object.entries(init.learnedLimits));
+  const purchases = new Map(init.purchases.map(p => [p.id, p.boughtAt]));
   /** `${sessionKey}|${noticeKind}` → time of the last notice emitted. Private, never in snapshots. */
   const lastNoticeAt = new Map<string, number>();
   /** sessionKey → current tool-XP minute window. Private, never in snapshots. */
@@ -410,7 +414,31 @@ export function createWorld(init: WorldInit, deps: WorldDeps): World {
     return out;
   }
 
-  function apply(ev: AgentEvent): Delta[] {
+  const totalXp = (): number => { let n = 0; for (const c of characters.values()) n += c.xp; return n; };
+  function shopState(): ShopState {
+    let spent = 0;
+    for (const u of UPGRADES) if (purchases.has(u.id)) spent += u.cost;
+    return { coins: totalXp() - spent, owned: [...purchases.keys()] };
+  }
+  /** Runs `fn`; when it changed total XP (the wallet is derived from it), a `shop` delta follows its deltas. */
+  function withShop(fn: () => Delta[]): Delta[] {
+    const before = totalXp();
+    const out = fn();
+    return totalXp() === before ? out : [...out, { type: "shop", shop: shopState() }];
+  }
+
+  function buy(id: string, at: number): Delta[] {
+    const u = UPGRADES.find(x => x.id === id);
+    if (u === undefined) throw new ShopError("unknown", "unknown upgrade");
+    if (purchases.has(id)) throw new ShopError("owned", "already owned");
+    if (shopState().coins < u.cost) throw new ShopError("poor", "not enough coins");
+    purchases.set(id, at);
+    return [{ type: "purchase", id, boughtAt: at }, { type: "shop", shop: shopState() }];
+  }
+
+  function apply(ev: AgentEvent): Delta[] { return withShop(() => applyEvent(ev)); }
+
+  function applyEvent(ev: AgentEvent): Delta[] {
     const key = `${ev.source}:${ev.sessionId}`;
     let s = sessions.get(key);
     if (ev.kind === "session_end") {
@@ -596,9 +624,12 @@ export function createWorld(init: WorldInit, deps: WorldDeps): World {
   function snapshot(now: number, demo: boolean): Snapshot {
     return clone({
       serverTime: now, demo,
-      characters: [...characters.values()], repos: [...repos.values()], sessions: [...sessions.values()], settings,
+      characters: [...characters.values()], repos: [...repos.values()], sessions: [...sessions.values()], settings, shop: shopState(),
     });
   }
 
-  return { apply, tick, ack, end, updateCharacter, updateSettings, snapshot };
+  return {
+    apply, tick: now => withShop(() => tick(now)), ack, end: (key, at) => withShop(() => end(key, at)),
+    updateCharacter, updateSettings, buy, snapshot,
+  };
 }

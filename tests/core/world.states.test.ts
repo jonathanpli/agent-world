@@ -239,7 +239,8 @@ test("ending an arriving session that earned XP binds it at the default tier and
   const d = w.end("t:s1", 2000);
   expect(chars(w)).toHaveLength(1);
   expect(chars(w)[0]).toMatchObject({ tier: CONFIG.defaultTier, xp: CONFIG.xp.prompt });
-  expect(d.at(-1)).toEqual({ type: "session_removed", key: "t:s1" });
+  expect(d.at(-2)).toEqual({ type: "session_removed", key: "t:s1" });
+  expect(d.at(-1)).toEqual({ type: "shop", shop: { coins: CONFIG.xp.prompt, owned: [] } });   // the wallet follows the XP
 });
 
 test("a blocking Stop hook: Stop, tool, repeat Stop, idle prompt → done, one done notice, task XP once", () => {

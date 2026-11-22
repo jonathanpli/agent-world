@@ -1,10 +1,11 @@
 import { CONFIG } from "../shared/config";
+import type { ShopState } from "../shared/shop";
 import type { Character, Delta, Notice, Repo, Session, Settings, Snapshot, Tier } from "../shared/types";
 
 /** The browser's mirror of the server's world, fed by the SSE snapshot and deltas. */
 export type ClientState = {
   characters: Map<string, Character>; repos: Map<string, Repo>; sessions: Map<string, Session>;
-  settings: Settings; demo: boolean; connected: boolean;
+  settings: Settings; shop: ShopState; demo: boolean; connected: boolean;
   notices: Notice[];                 // newest last, at most CONFIG.client.noticeMax
   notes: { at: number; text: string }[];   // client-only ticker lines (no toast, no attention), newest last, same cap
 };
@@ -12,7 +13,7 @@ export type ClientState = {
 export function emptyState(): ClientState {
   return {
     characters: new Map(), repos: new Map(), sessions: new Map(),
-    settings: { ...CONFIG.defaultSettings }, demo: false, connected: false, notices: [], notes: [],
+    settings: { ...CONFIG.defaultSettings }, shop: { coins: 0, owned: [] }, demo: false, connected: false, notices: [], notes: [],
   };
 }
 
@@ -22,6 +23,7 @@ export function applySnapshot(s: ClientState, snap: Snapshot): void {
   s.repos = new Map(snap.repos.map(r => [r.id, r]));
   s.sessions = new Map(snap.sessions.map(x => [x.key, x]));
   s.settings = snap.settings;
+  s.shop = snap.shop;
   s.demo = snap.demo;
 }
 
@@ -59,6 +61,8 @@ export function applyDeltas(s: ClientState, deltas: Delta[]): Notice[] {
       case "notice": notices.push(d.notice); s.notices.push(d.notice); break;
       case "credit": break;
       case "learned_limit": break;
+      case "purchase": break;
+      case "shop": s.shop = d.shop; break;
     }
   }
   const excess = s.notices.length - CONFIG.client.noticeMax;

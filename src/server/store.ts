@@ -109,6 +109,7 @@ export function openStore(path: string): Store {
       input = input + excluded.input, output = output + excluded.output, cache_read = cache_read + excluded.cache_read,
       cache_write = cache_write + excluded.cache_write, cache_write_1h = cache_write_1h + excluded.cache_write_1h,
       cost_micros = cost_micros + excluded.cost_micros`);
+  const insertPurchase = db.prepare("INSERT OR IGNORE INTO purchases (id, bought_at) VALUES (?, ?)");
   const deleteSession = db.prepare("DELETE FROM sessions WHERE key = ?");
   const deleteServerState = db.prepare("DELETE FROM session_server WHERE key = ?");
   const upsertCursor = db.prepare(`
@@ -206,11 +207,13 @@ export function openStore(path: string): Store {
         usage: usageOf(extras.usage), pendingUsage: usageOf(extras.pendingUsage), moments: extras.moments ?? {},
       };
     });
+    const purchases = (db.prepare("SELECT id, bought_at FROM purchases ORDER BY bought_at, rowid").all() as Row[])
+      .map(r => ({ id: r.id as string, boughtAt: r.bought_at as number }));
     const settings: Record<string, unknown> = { ...CONFIG.defaultSettings };
     for (const r of db.prepare("SELECT key, value FROM settings").all() as Row[]) {
       if (r.key !== LEARNED_LIMITS_KEY) settings[r.key as string] = JSON.parse(r.value as string);
     }
-    return { characters, repos, sessions, settings: settings as Settings, learnedLimits: learnedLimits() };
+    return { characters, repos, sessions, settings: settings as Settings, learnedLimits: learnedLimits(), purchases };
   }
 
   function persist(deltas: Delta[]): void {
@@ -231,6 +234,8 @@ export function openStore(path: string): Store {
             break;
           }
           case "learned_limit": saveLearnedLimit(d.model, d.limit); break;
+          case "purchase": insertPurchase.run(d.id, d.boughtAt); break;
+          case "shop": break;
         }
       }
       db.exec("COMMIT");
