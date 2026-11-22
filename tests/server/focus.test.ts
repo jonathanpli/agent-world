@@ -35,7 +35,15 @@ test("precisionFor picks the first matching driver's precision", () => {
     [{ ...CMUX, ...TMUX }, "exact"],                                  // cmux inside tmux
     [{ cmuxWorkspace: "ws_1" }, "exact"],                             // a cmux workspace alone is enough
     [ITERM, "exact"],
-    [{ itermSession: "w0t0p0:ABC" }, "exact"],
+    [{ itermSession: "w0t0p0:6B29A1C4-0D2E-4F3A-9B8C-7D6E5F4A3B2C" }, "exact"],
+    [{ itermSession: "6B29A1C4-0D2E-4F3A-9B8C-7D6E5F4A3B2C" }, "exact"],
+    [{ itermSession: "w0t0p0:ABC" }, null],                           // not a UUID: the iTerm driver does not match
+    [{ itermSession: "-equit" }, null],
+    [{ itermSession: "w0t0p0:-i" }, null],
+    [{ bundleId: "com.googlecode.iterm2", itermSession: "-equit" }, "app"],   // falls through to the generic driver
+    [{ cmuxWorkspace: "-x" }, null],
+    [{ cmuxWorkspace: "ws_1", cmuxPanel: "-x", bundleId: "com.cmuxterm.app" }, "app"],
+    [{ bundleId: "com.apple.Terminal", tty: "-x" }, "app"],           // Terminal driver refuses it; the generic one activates the app
     [TERMINAL_APP, "exact"],
     [{ bundleId: "com.apple.Terminal" }, "app"],                      // no tty: only the app
     [VSCODE, "exact"],
@@ -67,10 +75,37 @@ test("iTerm2: fixed AppleScript with the session UUID as its only argument, noth
   expect(scriptOf(c!)).not.toContain("w0t1p0");
 });
 
-test("iTerm2: an id without a colon is passed whole", async () => {
+test("iTerm2: an id without a colon is passed whole when it is a UUID", async () => {
   const { run, calls } = recorder(() => ({ code: 0, stdout: "ok\n" }));
-  await focusTerminal({ itermSession: "6B29A1C4" }, "/repo", run, "darwin");
-  expect(argvOf(calls[0]!)).toEqual(["6B29A1C4"]);
+  await focusTerminal({ itermSession: "6B29A1C4-0D2E-4F3A-9B8C-7D6E5F4A3B2C" }, "/repo", run, "darwin");
+  expect(argvOf(calls[0]!)).toEqual(["6B29A1C4-0D2E-4F3A-9B8C-7D6E5F4A3B2C"]);
+});
+
+test("iTerm2: an id osascript could read as an option never reaches it (review finding)", async () => {
+  for (const itermSession of ["-equit", "w0t0p0:-i", "w:-ebeep", "w0t0p0:6B29A1C4"]) {
+    const { run, calls } = recorder(() => ({ code: 0, stdout: "ok\n" }));
+    expect(await focusTerminal({ itermSession }, "/repo", run, "darwin")).toBeNull();
+    expect(await focusTerminal({ itermSession, bundleId: "com.googlecode.iterm2" }, "/repo", run, "darwin")).toEqual({ precision: "app" });
+    expect(pairs(calls)).toEqual([["/usr/bin/open", ["-b", "com.googlecode.iterm2"]]]);
+  }
+});
+
+test("an identifier with a leading '-' never reaches run, in any field or argument position", async () => {
+  const BAD = "-zqbad";
+  const bases: TerminalInfo[] = [ITERM, TERMINAL_APP, { ...CMUX, ...TMUX }, VSCODE, GHOSTTY, { ...ITERM, ...CMUX, ...TMUX }];
+  const fields: (keyof TerminalInfo)[] = ["itermSession", "tty", "bundleId", "cmuxWorkspace", "cmuxSurface", "cmuxPanel", "tmuxPane"];
+  for (const base of bases) {
+    for (const field of fields) {
+      const t = { ...base, [field]: BAD };
+      const { run, calls } = recorder(() => ({ code: 0, stdout: "ok\n" }));
+      const r = await focusTerminal(t, "/repo", run, "darwin");
+      expect(r === null ? null : r.precision).toBe(precisionFor(t, "darwin"));
+      for (const c of calls) {
+        expect(c.file).not.toContain("zqbad");
+        for (const a of c.args) expect(a, `${field} in ${JSON.stringify(base)}`).not.toContain("zqbad");
+      }
+    }
+  }
 });
 
 test("iTerm2: a session that is gone, or a refused script, brings iTerm to the front with a note", async () => {
@@ -191,6 +226,61 @@ test("cmux: CLI missing everywhere → the app is activated and the note says so
     [`${homedir()}/Applications/cmux.app/Contents/Resources/bin/cmux`, ["--socket", "/tmp/cmux.sock", "select-workspace", "--workspace", "ws_0a1b2c"]],
     ["/usr/bin/open", ["-b", "com.cmuxterm.app"]],
   ]);
+});
+
+test("cmux: the bundle is searched for the CLI only for cmux's own bundle ids (nightly included)", async () => {
+  const { run, calls } = recorder(file => (file === "/usr/bin/open" ? { code: 0 } : file === "/usr/bin/mdfind" ? { code: 0, stdout: "" } : { code: 127 }));
+  await focusTerminal({ ...CMUX, bundleId: "com.cmuxterm.app.nightly" }, "/repo", run, "darwin");
+  expect(pairs(calls)[1]).toEqual(["/usr/bin/mdfind", ["kMDItemCFBundleIdentifier == 'com.cmuxterm.app.nightly'"]]);
+  expect(pairs(calls).at(-1)).toEqual(["/usr/bin/open", ["-b", "com.cmuxterm.app.nightly"]]);
+});
+
+test("cmux ids under another app: cmux on PATH only; missing → that app is activated with a note", async () => {
+  const t = { ...CMUX, bundleId: "com.mitchellh.ghostty" };
+  const missing = recorder(file => (file === "cmux" ? { code: 127 } : { code: 0 }));
+  const r = await focusTerminal(t, "/repo", missing.run, "darwin");
+  expect(r?.precision).toBe("app");
+  expect(r?.note).toMatch(/not found on PATH/);
+  expect(pairs(missing.calls)).toEqual([
+    ["cmux", ["--socket", "/tmp/cmux.sock", "select-workspace", "--workspace", "ws_0a1b2c"]],
+    ["/usr/bin/open", ["-b", "com.mitchellh.ghostty"]],
+  ]);
+  const found = recorder();
+  expect(await focusTerminal(t, "/repo", found.run, "darwin")).toEqual({ precision: "exact" });
+  expect(pairs(found.calls).map(([f]) => f)).toEqual(["cmux", "cmux", "/usr/bin/open"]);
+});
+
+test("cmux: the workspace selected but the panel not → a note saying so", async () => {
+  const { run, calls } = recorder((file, args) => (file === "cmux" && args.includes("focus-panel") ? { code: 1 } : { code: 0 }));
+  const r = await focusTerminal(CMUX, "/repo", run, "darwin");
+  expect(r?.precision).toBe("app");
+  expect(r?.note).toMatch(/selected the workspace but could not focus the panel/);
+  expect(pairs(calls).at(-1)).toEqual(["/usr/bin/open", ["-b", "com.cmuxterm.app"]]);
+});
+
+test("cmux notes tell a missing program from a refusal", async () => {
+  const missing = await focusTerminal(CMUX, "/repo", recorder(f => (f === "/usr/bin/open" ? { code: 0 } : { code: 127 })).run, "darwin");
+  const refused = await focusTerminal(CMUX, "/repo", recorder(f => (f === "cmux" ? { code: 1 } : { code: 0 })).run, "darwin");
+  expect(missing?.note).toMatch(/not found/);
+  expect(missing?.note).not.toMatch(/refused/);
+  expect(refused?.note).toMatch(/refused the request or the command failed/);
+  expect(refused?.note).not.toMatch(/not found/);
+});
+
+test("the whole chain starts no program after 8 000 ms: later steps are skipped, the result says so", async () => {
+  let clock = 50_000;
+  const { run, calls } = recorder(() => { clock += 3000; return { code: 0 }; });
+  const r = await focusTerminal({ ...CMUX, ...TMUX }, "/repo", run, "darwin", { now: () => clock });
+  expect(pairs(calls).map(([f]) => f)).toEqual(["cmux", "cmux", "/usr/bin/open"]);   // started at 0, 3 000 and 6 000 ms
+  expect(r?.precision).toBe("app");
+  expect(r?.note).toMatch(/stopped part-way/);
+});
+
+test("a chain within the budget has no part-way note", async () => {
+  let clock = 0;
+  const { run, calls } = recorder(() => { clock += 1000; return { code: 0 }; });
+  expect(await focusTerminal({ ...CMUX, ...TMUX }, "/repo", run, "darwin", { now: () => clock })).toEqual({ precision: "exact" });
+  expect(calls).toHaveLength(5);
 });
 
 test("cmux: a refused socket → the app is activated and the note points at cmux's access setting, never at cmux's own words", async () => {

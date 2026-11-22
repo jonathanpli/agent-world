@@ -817,7 +817,7 @@ test("a shop delta reaches the stream when XP is earned", async () => {
 
 // --- terminal identifiers (Task 5) ---
 
-const TERMINAL = { bundleId: "com.googlecode.iterm2", itermSession: "w0t1p0:zq7Distinctive-4F3A", tty: "ttys012", tmuxSocket: "/tmp/tmux-501/zq7sock" };
+const TERMINAL = { bundleId: "com.googlecode.iterm2", itermSession: "w0t1p0:7A7D1571-0D2E-4F3A-9B8C-7D6E5F4A3B2C", tty: "ttys012", tmuxSocket: "/tmp/tmux-501/zq7sock" };
 const TERMINAL_HEADERS = {
   "X-AW-Bundle-Id": TERMINAL.bundleId, "X-AW-Iterm-Session": TERMINAL.itermSession, "X-AW-Tty": TERMINAL.tty, "X-AW-Tmux-Socket": TERMINAL.tmuxSocket,
 };
@@ -929,7 +929,7 @@ test("POST /api/sessions/:key/focus: 404 unknown, 409 nothing to focus, 200 with
   expect(res.status).toBe(200);
   expect(await res.json()).toEqual({ precision: "exact" });
   expect(calls.map(c => c.file)).toEqual(["/usr/bin/osascript"]);
-  expect(calls[0]!.args.at(-1)).toBe("zq7Distinctive-4F3A");
+  expect(calls[0]!.args.at(-1)).toBe("7A7D1571-0D2E-4F3A-9B8C-7D6E5F4A3B2C");
 });
 
 test("the focus endpoint passes the session's repo path to the driver", async () => {
@@ -1009,4 +1009,40 @@ test("demo mode: focus is always empty and the endpoint has nothing to focus", a
   expect((await snapshot(base)).focus).toEqual({});
   expect((await send(base, "POST", focusPath(s!.key))).status).toBe(409);
   expect(calls).toEqual([]);
+});
+
+test("two overlapping focus requests for one session share one chain of programs", async () => {
+  const calls: RunCall[] = [];
+  let release!: () => void;
+  const gate = new Promise<void>(r => { release = r; });
+  const run: NonNullable<AppOptions["run"]> = async (file, args) => { calls.push({ file, args: [...args] }); await gate; return { code: 0, stdout: "ok\n", stderr: "" }; };
+  const { base } = await start({ run });
+  await hook(base, "SessionStart");
+  const first = send(base, "POST", focusPath());
+  while (calls.length === 0) await new Promise(r => setTimeout(r, 5));
+  const second = send(base, "POST", focusPath());
+  await new Promise(r => setTimeout(r, 100));                        // the second request is in, waiting on the first
+  release();
+  const [a, b] = await Promise.all([first, second]);
+  expect([a.status, b.status]).toEqual([200, 200]);
+  expect(await a.json()).toEqual({ precision: "exact" });
+  expect(await b.json()).toEqual({ precision: "exact" });
+  expect(calls.map(c => c.file)).toEqual(["/usr/bin/osascript"]);
+  const third = await send(base, "POST", focusPath());                // once done, a new request runs again
+  expect(third.status).toBe(200);
+  expect(calls).toHaveLength(2);
+});
+
+test("a slow chain stops starting programs after 8 000 ms on the app's clock: 200 with a note", async () => {
+  let clock = 1_000_000;
+  const calls: RunCall[] = [];
+  const run: NonNullable<AppOptions["run"]> = async (file, args) => { calls.push({ file, args: [...args] }); clock += 3000; return { code: 0, stdout: "", stderr: "" }; };
+  const { base } = await start({ run, now: () => clock });
+  await hook(base, "SessionStart", { "X-AW-Bundle-Id": "com.cmuxterm.app", "X-AW-Cmux-Workspace": "ws_1", "X-AW-Cmux-Panel": "pn_1", "X-AW-Tmux-Pane": "%3" });
+  const res = await send(base, "POST", focusPath());
+  expect(res.status).toBe(200);
+  const body = await res.json() as { precision: string; note?: string };
+  expect(body.precision).toBe("app");
+  expect(body.note).toMatch(/stopped part-way/);
+  expect(calls.map(c => c.file)).toEqual(["cmux", "cmux", "/usr/bin/open"]);
 });

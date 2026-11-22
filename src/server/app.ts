@@ -8,7 +8,7 @@ import { createWorld } from "../core/world";
 import { CONFIG } from "../shared/config";
 import { ShopError } from "../shared/shop";
 import type { AgentEvent, Delta, FocusPrecision, Look, Settings, Snapshot } from "../shared/types";
-import { defaultRun, focusTerminal, precisionFor, type Run } from "./focus";
+import { defaultRun, focusTerminal, precisionFor, type FocusResult, type Run } from "./focus";
 import { isDay, localDay } from "./recap";
 import { createRepoResolver } from "./repoResolver";
 import type { Store } from "./store";
@@ -118,6 +118,8 @@ export function createApp(opts: AppOptions): App {
   const usageCursors = new Map<string, UsageCursor>();
   /** sessionKey → the terminal its hook last reported. Server-side only: never in a snapshot or a delta. */
   const terminals = new Map<string, TerminalInfo>();
+  /** sessionKey → the focus request running for it: a second request while it runs gets the same result. */
+  const focusing = new Map<string, Promise<FocusResult | null>>();
   for (const [key, { cursor, terminal }] of store.loadServerState()) {
     if (cursor !== null) usageCursors.set(key, cursor);
     const t = asTerminalInfo(terminal);
@@ -379,7 +381,12 @@ export function createApp(opts: AppOptions): App {
     const terminal = terminals.get(key);
     if (focusOf(key) === null || terminal === undefined) { sendJson(res, 409, { error: "nothing to focus" }); return; }
     const repoPath = snap.repos.find(r => r.id === session.repoId)?.path ?? "";
-    const result = await focusTerminal(terminal, repoPath, run, platform);
+    let pending = focusing.get(key);
+    if (pending === undefined) {
+      pending = focusTerminal(terminal, repoPath, run, platform, { now }).finally(() => focusing.delete(key));
+      focusing.set(key, pending);
+    }
+    const result = await pending;
     if (result === null) { sendJson(res, 409, { error: "nothing to focus" }); return; }
     sendJson(res, 200, result);
   }
