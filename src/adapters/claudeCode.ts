@@ -42,10 +42,12 @@ function agentUsage(response: unknown): Pick<AgentEvent, "usage" | "usageModel" 
   if (!isRecord(response) || !isRecord(response.usage)) return undefined;
   const u = response.usage;
   const model = str(response.resolvedModel);
+  const total = count(u.cache_creation_input_tokens);
+  const cacheWrite1h = isRecord(u.cache_creation) ? count(u.cache_creation.ephemeral_1h_input_tokens) : 0;
   return {
     usage: {
       input: count(u.input_tokens), output: count(u.output_tokens), cacheRead: count(u.cache_read_input_tokens),
-      cacheWrite: count(u.cache_creation_input_tokens), cacheWrite1h: isRecord(u.cache_creation) ? count(u.cache_creation.ephemeral_1h_input_tokens) : 0,
+      cacheWrite: Math.max(0, total - cacheWrite1h), cacheWrite1h,   // disjoint: the total counts both
     },
     ...(model !== undefined && model !== "" && { usageModel: model }),
     sidekick: true,

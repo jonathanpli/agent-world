@@ -52,6 +52,14 @@ describe("claudeCode adapter", () => {
     const bare = claudeCode.parse({ ...fx("PostToolUse.agentTool"), tool_response: noUsage }, 0)[0];
     expect(bare.usage).toBeUndefined(); expect(bare.usageModel).toBeUndefined(); expect(bare.sidekick).toBeUndefined();
   });
+  test("Agent usage: cache writes split into disjoint 5m and 1h parts", () => {
+    const withUsage = (usage: Record<string, unknown>) => claudeCode.parse({ ...fx("PostToolUse.agentTool"), tool_response: { resolvedModel: "m", usage } }, 0)[0].usage;
+    expect(withUsage({ cache_creation_input_tokens: 1000, cache_creation: { ephemeral_5m_input_tokens: 400, ephemeral_1h_input_tokens: 600 } })).toMatchObject({ cacheWrite: 400, cacheWrite1h: 600 });
+    expect(withUsage({ cache_creation_input_tokens: 1000 })).toMatchObject({ cacheWrite: 1000, cacheWrite1h: 0 });
+    expect(withUsage({ cache_creation_input_tokens: 1000, cache_creation: { ephemeral_5m_input_tokens: 1, ephemeral_1h_input_tokens: 600 } })).toMatchObject({ cacheWrite: 400, cacheWrite1h: 600 });
+    expect(withUsage({ cache_creation_input_tokens: 100, cache_creation: { ephemeral_1h_input_tokens: 600 } })).toMatchObject({ cacheWrite: 0, cacheWrite1h: 600 });
+    expect(withUsage({ input_tokens: "x", output_tokens: -5, cache_creation_input_tokens: -1 })).toEqual({ input: 0, output: 0, cacheRead: 0, cacheWrite: 0, cacheWrite1h: 0 });
+  });
   test("junk never throws", () => { for (const j of [null, 1, "x", [], {}, { hook_event_name: "Stop" }, { hook_event_name: "Nope", session_id: "s", cwd: "/" }]) expect(claudeCode.parse(j, 0)).toEqual([]); });
   test("tierForModel: an unrecognised id is the default tier; missing, empty and placeholders stay unknown", () => {
     expect(["claude-haiku-5-5","claude-sonnet-5-5","claude-opus-5-5","claude-fable-5-2","claude-mythos-5-2","gpt-x",undefined,"","<synthetic>"].map(tierForModel))

@@ -5,6 +5,7 @@ export type ToolKind = "edit" | "shell" | "read" | "web" | "delegate" | "other";
 export type Compaction = { uuid: string; trigger: "auto" | "manual"; preTokens: number; postTokens: number };
 export type EventKind = "session_start" | "prompt" | "tool" | "needs_input" | "task_done" | "model_change" | "session_end" | "sub_start" | "sub_end" | "context" | "usage";
 export type MomentKind = "commit" | "push" | "pr_opened" | "pr_merged" | "tests_passed" | "tests_failed";
+/** cacheWrite is the 5-minute cache writes only and cacheWrite1h the 1-hour ones: disjoint, so their sum is all cache writes. */
 export type UsageDelta = { input: number; output: number; cacheRead: number; cacheWrite: number; cacheWrite1h: number };
 export type AgentEvent = {
   source: string; sessionId: string; repoPath: string; at: number; kind: EventKind;
