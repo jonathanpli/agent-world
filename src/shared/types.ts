@@ -3,7 +3,9 @@ export type Effort = "low" | "medium" | "high" | "xhigh" | "max";
 export type CharState = "working" | "needs_input" | "done" | "idle" | "off_duty";
 export type ToolKind = "edit" | "shell" | "read" | "web" | "delegate" | "other";
 export type Compaction = { uuid: string; trigger: "auto" | "manual"; preTokens: number; postTokens: number };
-export type EventKind = "session_start" | "prompt" | "tool" | "needs_input" | "task_done" | "model_change" | "session_end" | "sub_start" | "sub_end" | "context";
+export type EventKind = "session_start" | "prompt" | "tool" | "needs_input" | "task_done" | "model_change" | "session_end" | "sub_start" | "sub_end" | "context" | "usage";
+export type MomentKind = "commit" | "push" | "pr_opened" | "pr_merged" | "tests_passed" | "tests_failed";
+export type UsageDelta = { input: number; output: number; cacheRead: number; cacheWrite: number; cacheWrite1h: number };
 export type AgentEvent = {
   source: string; sessionId: string; repoPath: string; at: number; kind: EventKind;
   model?: string; tier?: Tier; effort?: Effort; detail?: Record<string, string>;
@@ -12,6 +14,11 @@ export type AgentEvent = {
   failed?: true;                     // tool: a PostToolUseFailure that was not an interrupt
   contextTokens?: number;            // context
   boundaries?: Compaction[];         // context: every boundary found in the tail, oldest first
+  moment?: MomentKind;               // tool: a git or test moment recognised in a Bash command
+  usage?: UsageDelta;                // usage; and tool events for the Agent tool (the subagent's totals)
+  usageModel?: string;               // the model the usage is priced at
+  sidekick?: true;                   // usage that belongs to a subagent
+  longPrompt?: true;                 // usage: every message in this batch had a prompt over 100 000 tokens
 };
 export type Look = { body: string; skin: string; hairStyle: number; hairColor: string; hat: string | null; accessory: string | null };
 export type Character = {

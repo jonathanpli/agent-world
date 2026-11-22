@@ -1,6 +1,7 @@
 import { CONFIG } from "../shared/config";
 import type { AgentEvent, Effort, Tier, ToolKind } from "../shared/types";
 import type { Adapter } from "./index";
+import { commitSubject, momentFor } from "./moments";
 
 const EFFORTS: readonly string[] = ["low", "medium", "high", "xhigh", "max"];
 const NEEDS_INPUT_TYPES: Readonly<Record<string, "idle" | "blocking">> = {
@@ -32,6 +33,23 @@ function toolSummary(name: string, input: unknown): string {
   const i = isRecord(input) ? input : {};
   const arg = str(i.file_path) ?? str(i.command) ?? str(i.pattern) ?? str(i.description) ?? "";
   return `${name} ${arg}`.slice(0, CONFIG.summaryMax);
+}
+
+const count = (v: unknown): number => (typeof v === "number" && Number.isFinite(v) && v > 0 ? v : 0);
+
+/** The token totals an Agent tool's response reports for the whole subagent run, or undefined when it reports none. */
+function agentUsage(response: unknown): Pick<AgentEvent, "usage" | "usageModel" | "sidekick"> | undefined {
+  if (!isRecord(response) || !isRecord(response.usage)) return undefined;
+  const u = response.usage;
+  const model = str(response.resolvedModel);
+  return {
+    usage: {
+      input: count(u.input_tokens), output: count(u.output_tokens), cacheRead: count(u.cache_read_input_tokens),
+      cacheWrite: count(u.cache_creation_input_tokens), cacheWrite1h: isRecord(u.cache_creation) ? count(u.cache_creation.ephemeral_1h_input_tokens) : 0,
+    },
+    ...(model !== undefined && model !== "" && { usageModel: model }),
+    sidekick: true,
+  };
 }
 
 function parse(raw: unknown, now: number): AgentEvent[] {
@@ -67,8 +85,13 @@ function parse(raw: unknown, now: number): AgentEvent[] {
         const agentId = str(raw.agent_id);
         const agentType = str(raw.agent_type);
         const inSub = agentId !== undefined && agentId !== "" && agentType !== undefined && agentType !== "";
-        return ev("tool", { ...(effort && { effort }), ...(failure && { failed: true as const }) },
-          { tool, summary: toolSummary(tool, raw.tool_input), toolKind: toolKindFor(tool), ...(inSub && { agentId, agentType }) });
+        const command = tool === "Bash" && isRecord(raw.tool_input) ? str(raw.tool_input.command) : undefined;
+        const moment = command !== undefined ? momentFor(command, failure) : null;
+        const stdout = isRecord(raw.tool_response) ? str(raw.tool_response.stdout) : undefined;
+        const subject = moment === "commit" && stdout !== undefined ? commitSubject(stdout) : null;
+        const sub = !failure && (tool === "Agent" || tool === "Task") ? agentUsage(raw.tool_response) : undefined;
+        return ev("tool", { ...(effort && { effort }), ...(failure && { failed: true as const }), ...(moment !== null && { moment }), ...sub },
+          { tool, summary: toolSummary(tool, raw.tool_input), toolKind: toolKindFor(tool), ...(inSub && { agentId, agentType }), ...(subject !== null && { momentText: subject }) });
       }
       case "SubagentStart":
       case "SubagentStop": {
