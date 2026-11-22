@@ -48,6 +48,16 @@ export function asTerminalInfo(v: unknown): TerminalInfo | null {
   return collect(field => (Object.hasOwn(rec, field) ? rec[field] : undefined));
 }
 
+/**
+ * What to keep when a hook reports `incoming` for a session that has `stored`. The same bundle id (or none in both): merged
+ * field by field, reported fields win and unreported ones keep their value (a hook without the tty must not erase it).
+ * A different bundle id, or one side without it: the session moved to another terminal app, so `incoming` replaces it.
+ */
+export function mergeTerminal(stored: TerminalInfo | undefined, incoming: TerminalInfo): TerminalInfo {
+  if (stored === undefined || stored.bundleId !== incoming.bundleId) return { ...incoming };
+  return { ...stored, ...incoming };
+}
+
 /** True when both describe the same terminal. */
 export function sameTerminal(a: TerminalInfo | undefined, b: TerminalInfo): boolean {
   return a !== undefined && FIELDS.every(([field]) => a[field] === b[field]);

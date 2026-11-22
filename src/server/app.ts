@@ -7,11 +7,12 @@ import { tierForModel } from "../adapters/claudeCode";
 import { createWorld } from "../core/world";
 import { CONFIG } from "../shared/config";
 import { ShopError } from "../shared/shop";
-import type { AgentEvent, Delta, Look, Settings } from "../shared/types";
+import type { AgentEvent, Delta, FocusPrecision, Look, Settings, Snapshot } from "../shared/types";
+import { defaultRun, focusTerminal, precisionFor, type Run } from "./focus";
 import { isDay, localDay } from "./recap";
 import { createRepoResolver } from "./repoResolver";
 import type { Store } from "./store";
-import { asTerminalInfo, sameTerminal, terminalFromHeaders, type TerminalInfo } from "./terminal";
+import { asTerminalInfo, mergeTerminal, sameTerminal, terminalFromHeaders, type TerminalInfo } from "./terminal";
 import { readTranscript as readTranscriptFile, type TranscriptInfo } from "./transcript";
 import { readUsage as readUsageFile, type UsageCursor } from "./usageReader";
 
@@ -19,6 +20,7 @@ export type AppOptions = {
   store: Store; demo: boolean; now?: () => number; staticDir?: string;
   resolveRepo?: (cwd: string) => Promise<string>; readTranscript?: (transcriptPath: string) => Promise<TranscriptInfo>;
   readUsage?: typeof readUsageFile;
+  run?: Run; platform?: NodeJS.Platform;     // how focus drivers run programs, and the OS they run on
 };
 export type App = {
   handler: (req: IncomingMessage, res: ServerResponse) => void;
@@ -99,6 +101,8 @@ export function createApp(opts: AppOptions): App {
   const resolveRepo = opts.resolveRepo ?? createRepoResolver();
   const readTranscript = opts.readTranscript ?? readTranscriptFile;
   const readUsage = opts.readUsage ?? readUsageFile;
+  const run = opts.run ?? defaultRun;
+  const platform = opts.platform ?? process.platform;
   const world = createWorld(store.load(), { rng: Math.random, newId: randomUUID });
 
   /**
@@ -124,17 +128,33 @@ export function createApp(opts: AppOptions): App {
   let queue: Promise<void> = Promise.resolve();
   let lastPruneAt = -Infinity;
 
+  /** How precisely a session's terminal can be brought to the front; null when it cannot (always, in demo mode). */
+  const focusOf = (key: string): FocusPrecision | null => (demo ? null : precisionFor(terminals.get(key) ?? null, platform));
+
+  /** The world's snapshot with the `focus` map filled in from the terminals kept here. */
+  function snapshot(): Snapshot {
+    const snap = world.snapshot(now(), demo);
+    const focus: Record<string, FocusPrecision> = {};
+    for (const s of snap.sessions) {
+      const p = focusOf(s.key);
+      if (p !== null) focus[s.key] = p;
+    }
+    return { ...snap, focus };
+  }
+
   function commit(deltas: Delta[]): void {
     store.persist(deltas);
+    const focusGone: Delta[] = [];
     for (const d of deltas) {
       if (d.type === "session") sessionWantsModel.set(d.session.key, wantsModel(d.session));
       else if (d.type === "session_removed") {
         sessionWantsModel.delete(d.key); modelTries.delete(d.key); forgetContextReads(d.key); usageCursors.delete(d.key);
+        if (focusOf(d.key) !== null) focusGone.push({ type: "focus", key: d.key, precision: null });
         terminals.delete(d.key);
       }
     }
     // credit, learned limits and purchases are for the store only: browsers do not use them
-    const shown = deltas.filter(d => d.type !== "credit" && d.type !== "learned_limit" && d.type !== "purchase");
+    const shown = [...deltas.filter(d => d.type !== "credit" && d.type !== "learned_limit" && d.type !== "purchase"), ...focusGone];
     if (shown.length === 0) return;
     const msg = `event: delta\ndata: ${JSON.stringify(shown)}\n\n`;
     for (const s of streams) s.write(msg);
@@ -244,11 +264,20 @@ export function createApp(opts: AppOptions): App {
     });
   }
 
-  /** Keeps (and saves) the terminal a hook reported for a session the world knows, when it differs from the one kept. */
-  function rememberTerminal(key: string, terminal: TerminalInfo): void {
-    if (closed || !sessionWantsModel.has(key) || sameTerminal(terminals.get(key), terminal)) return;   // the map holds every known session
+  /**
+   * Merges the terminal a hook reported into the one kept for a session the world knows (see `mergeTerminal`), saves the
+   * result when it differs, and broadcasts a `focus` delta when that changes how the session can be focused.
+   */
+  function rememberTerminal(key: string, reported: TerminalInfo): void {
+    if (closed || !sessionWantsModel.has(key)) return;   // the map holds every known session
+    const kept = terminals.get(key);
+    const terminal = mergeTerminal(kept, reported);
+    if (sameTerminal(kept, terminal)) return;
+    const before = focusOf(key);
     terminals.set(key, terminal);
     store.saveTerminal(key, terminal);
+    const after = focusOf(key);
+    if (after !== before) commit([{ type: "focus", key, precision: after }]);
   }
 
   function tick(): void {
@@ -287,7 +316,7 @@ export function createApp(opts: AppOptions): App {
 
   function openStream(req: IncomingMessage, res: ServerResponse): void {
     res.writeHead(200, { "content-type": "text/event-stream", "cache-control": "no-cache", connection: "keep-alive" });
-    res.write(`event: snapshot\ndata: ${JSON.stringify(world.snapshot(now(), demo))}\n\n`);
+    res.write(`event: snapshot\ndata: ${JSON.stringify(snapshot())}\n\n`);
     streams.add(res);
     const keepAlive = setInterval(() => res.write(": keep-alive\n\n"), CONFIG.sseKeepAliveMs);
     keepAlive.unref();
@@ -342,6 +371,19 @@ export function createApp(opts: AppOptions): App {
     sendJson(res, 200, world.snapshot(now(), demo).shop);
   }
 
+  /** Brings a session's terminal to the front: 200 with the result, 404 for an unknown session, 409 when nothing can be focused. */
+  async function focusSession(res: ServerResponse, key: string): Promise<void> {
+    const snap = world.snapshot(now(), demo);
+    const session = snap.sessions.find(s => s.key === key);
+    if (session === undefined) { sendJson(res, 404, { error: "unknown session" }); return; }
+    const terminal = terminals.get(key);
+    if (focusOf(key) === null || terminal === undefined) { sendJson(res, 409, { error: "nothing to focus" }); return; }
+    const repoPath = snap.repos.find(r => r.id === session.repoId)?.path ?? "";
+    const result = await focusTerminal(terminal, repoPath, run, platform);
+    if (result === null) { sendJson(res, 409, { error: "nothing to focus" }); return; }
+    sendJson(res, 200, result);
+  }
+
   async function serveStatic(res: ServerResponse, pathname: string): Promise<void> {
     if (opts.staticDir === undefined) { sendStatus(res, 404); return; }
     const root = resolve(opts.staticDir);
@@ -380,7 +422,7 @@ export function createApp(opts: AppOptions): App {
       if (!isDay(day)) return sendJson(res, 400, { error: "day must be YYYY-MM-DD" });
       return sendJson(res, 200, store.recap(day, today));
     }
-    if (method === "GET" && path === "/api/snapshot") return sendJson(res, 200, world.snapshot(now(), demo));
+    if (method === "GET" && path === "/api/snapshot") return sendJson(res, 200, snapshot());
     if (method === "PATCH" && (m = path.match(/^\/api\/characters\/([^/]+)$/))) {
       const id = decode(m[1]!);
       return id === null ? badEscape() : patchCharacter(req, res, id);
@@ -398,6 +440,10 @@ export function createApp(opts: AppOptions): App {
       if (deltas.length === 0) return sendJson(res, 404, { error: "unknown session" });
       commit(deltas);
       return sendStatus(res, 204);
+    }
+    if (method === "POST" && (m = path.match(/^\/api\/sessions\/([^/]+)\/focus$/))) {
+      const key = decode(m[1]!);
+      return key === null ? badEscape() : focusSession(res, key);
     }
     if (method === "POST" && path === "/api/shop/buy") return buyUpgrade(req, res);
     if (method === "PUT" && path === "/api/settings") return putSettings(req, res);

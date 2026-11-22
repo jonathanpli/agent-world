@@ -1,5 +1,5 @@
 import { expect, test } from "vitest";
-import { asTerminalInfo, terminalFromHeaders } from "../../src/server/terminal";
+import { asTerminalInfo, mergeTerminal, terminalFromHeaders } from "../../src/server/terminal";
 
 const VALID = {
   "x-aw-bundle-id": "com.googlecode.iterm2", "x-aw-term-program": "iTerm.app", "x-aw-iterm-session": "w0t1p0:6B29A1C4-0D2E-4F3A-9B8C-7D6E5F4A3B2C",
@@ -69,4 +69,19 @@ test("a stored terminal is validated again when read back", () => {
   expect(asTerminalInfo(FULL)).toEqual(FULL);
   expect(asTerminalInfo({ ...FULL, tty: "$(x)", extra: "y", tmuxPane: 7 })).toEqual({ ...FULL, tty: undefined, tmuxPane: undefined });
   for (const v of [null, undefined, "ttys001", 42, [], [FULL], {}]) expect(asTerminalInfo(v)).toBeNull();
+});
+
+test("mergeTerminal: the same bundle id (or none in both) merges field-wise; new fields win, missing ones keep", () => {
+  const stored = { bundleId: "com.apple.Terminal", tty: "ttys004", tmuxPane: "%1" };
+  expect(mergeTerminal(stored, { bundleId: "com.apple.Terminal", tmuxPane: "%2" })).toEqual({ bundleId: "com.apple.Terminal", tty: "ttys004", tmuxPane: "%2" });
+  expect(mergeTerminal({ tty: "ttys004" }, { cmuxWorkspace: "ws_1" })).toEqual({ tty: "ttys004", cmuxWorkspace: "ws_1" });
+  expect(mergeTerminal(undefined, { tty: "ttys004" })).toEqual({ tty: "ttys004" });
+  expect(stored).toEqual({ bundleId: "com.apple.Terminal", tty: "ttys004", tmuxPane: "%1" });   // inputs are not changed
+});
+
+test("mergeTerminal: a different bundle id (or one side without it) replaces wholesale", () => {
+  const stored = { bundleId: "com.apple.Terminal", tty: "ttys004" };
+  expect(mergeTerminal(stored, { bundleId: "com.googlecode.iterm2", itermSession: "w0t0p0:A" })).toEqual({ bundleId: "com.googlecode.iterm2", itermSession: "w0t0p0:A" });
+  expect(mergeTerminal(stored, { tmuxPane: "%1" })).toEqual({ tmuxPane: "%1" });
+  expect(mergeTerminal({ tty: "ttys004" }, { bundleId: "com.apple.Terminal" })).toEqual({ bundleId: "com.apple.Terminal" });
 });

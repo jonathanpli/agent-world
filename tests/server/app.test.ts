@@ -28,7 +28,11 @@ const aborts: AbortController[] = [];
 
 async function start(opts: Partial<AppOptions> = {}): Promise<Running> {
   const store = opts.store ?? openStore(":memory:");
-  const app = createApp({ demo: false, resolveRepo: async p => p, readTranscript: byModel(async () => null), readUsage: noUsage, ...opts, store });
+  const app = createApp({
+    demo: false, resolveRepo: async p => p, readTranscript: byModel(async () => null), readUsage: noUsage,
+    platform: "darwin", run: async () => ({ code: 0, stdout: "ok\n", stderr: "" }),     // nothing real is ever run
+    ...opts, store,
+  });
   const server = createServer(app.handler);
   await new Promise<void>(r => server.listen(0, "127.0.0.1", r));
   const r = { base: `http://127.0.0.1:${(server.address() as AddressInfo).port}`, app, store, server };
@@ -859,7 +863,7 @@ test("terminal values never reach the snapshot or the stream", async () => {
   texts.push(await res.text());
   expect(texts.at(-1)).toContain(SESSION_KEY.split(":")[1]);           // the session is there
   for (const t of texts) for (const v of [...Object.values(TERMINAL), "zq7"]) expect(t).not.toContain(v);
-  expect((await snapshot(base)).focus).toEqual({});
+  expect((await snapshot(base)).focus).toEqual({ [SESSION_KEY]: "exact" });   // only the precision is shown
 });
 
 test("a restarted app reloads the terminal; removing the session forgets it", async () => {
@@ -891,4 +895,118 @@ test("a stored terminal is validated again on reload", async () => {
   expect(second.saved).toEqual([]);
   await hook(b.base, "Stop");
   expect(second.saved).toEqual([[SESSION_KEY, TERMINAL]]);
+});
+
+// --- jump to session (Task 6) ---
+
+type RunCall = { file: string; args: string[] };
+function runRecorder(): { run: NonNullable<AppOptions["run"]>; calls: RunCall[] } {
+  const calls: RunCall[] = [];
+  return { calls, run: async (file, args) => { calls.push({ file, args: [...args] }); return { code: 0, stdout: "ok\n", stderr: "" }; } };
+}
+const focusPath = (key = SESSION_KEY) => `/api/sessions/${encodeURIComponent(key)}/focus`;
+/** Reads stream messages until a delta batch contains a `focus` delta, and returns that delta. */
+async function nextFocus(next: () => Promise<{ event: string; data: unknown }>): Promise<Delta> {
+  for (;;) {
+    const msg = await next();
+    const d = msg.event === "delta" ? (msg.data as Delta[]).find(x => x.type === "focus") : undefined;
+    if (d !== undefined) return d;
+  }
+}
+
+test("POST /api/sessions/:key/focus: 404 unknown, 409 nothing to focus, 200 with the result", async () => {
+  const { run, calls } = runRecorder();
+  const { base } = await start({ run });
+  expect((await send(base, "POST", focusPath())).status).toBe(404);
+  expect((await send(base, "POST", "/api/sessions/%E0%A4%A/focus")).status).toBe(400);
+  await ingest(base, fx("SessionStart"));                               // a session without a terminal
+  expect((await send(base, "POST", focusPath())).status).toBe(409);
+  await hook(base, "UserPromptSubmit", { "X-AW-Tmux-Pane": "%3" });   // tmux alone matches no driver
+  expect((await send(base, "POST", focusPath())).status).toBe(409);
+  expect(calls).toEqual([]);
+  await hook(base, "UserPromptSubmit");                                 // iTerm
+  const res = await send(base, "POST", focusPath());
+  expect(res.status).toBe(200);
+  expect(await res.json()).toEqual({ precision: "exact" });
+  expect(calls.map(c => c.file)).toEqual(["/usr/bin/osascript"]);
+  expect(calls[0]!.args.at(-1)).toBe("zq7Distinctive-4F3A");
+});
+
+test("the focus endpoint passes the session's repo path to the driver", async () => {
+  const { run, calls } = runRecorder();
+  const { base } = await start({ run });
+  await hook(base, "SessionStart", { "X-AW-Bundle-Id": "com.microsoft.VSCode", "X-AW-Term-Program": "vscode" });
+  expect((await send(base, "POST", focusPath())).status).toBe(200);
+  expect(calls).toEqual([{ file: "/usr/bin/open", args: ["-b", "com.microsoft.VSCode", JSON.parse(fx("SessionStart")).cwd] }]);
+});
+
+test("the focus endpoint refuses a foreign Host or Origin and runs nothing", async () => {
+  const { run, calls } = runRecorder();
+  const { base } = await start({ run });
+  await hook(base, "SessionStart");
+  expect((await raw(base, "POST", focusPath(), { host: "evil.example:4317" })).status).toBe(403);
+  expect((await raw(base, "POST", focusPath(), { origin: "https://evil.example" })).status).toBe(403);
+  expect((await raw(base, "POST", focusPath(), { origin: "null" })).status).toBe(403);
+  expect(calls).toEqual([]);
+});
+
+test("snapshot.focus lists a session once its terminal is known; focus deltas follow changes and removal", async () => {
+  const { base } = await start();
+  const next = await openStream(base);
+  await next();
+  await ingest(base, fx("SessionStart"));
+  expect((await snapshot(base)).focus).toEqual({});
+  await hook(base, "UserPromptSubmit", { "X-AW-Bundle-Id": "com.apple.Terminal" });
+  expect(await nextFocus(next)).toEqual({ type: "focus", key: SESSION_KEY, precision: "app" });
+  expect((await snapshot(base)).focus).toEqual({ [SESSION_KEY]: "app" });
+  await hook(base, "PostToolUse", { "X-AW-Bundle-Id": "com.apple.Terminal", "X-AW-Tty": "ttys004" });
+  expect(await nextFocus(next)).toEqual({ type: "focus", key: SESSION_KEY, precision: "exact" });
+  await hook(base, "PostToolUse", { "X-AW-Bundle-Id": "com.apple.Terminal" });   // merged: the tty is kept, nothing changes
+  expect((await snapshot(base)).focus).toEqual({ [SESSION_KEY]: "exact" });
+  const later = await openStream(base);
+  expect(((await later()).data as Snapshot).focus).toEqual({ [SESSION_KEY]: "exact" });
+  expect((await send(base, "POST", `/api/sessions/${encodeURIComponent(SESSION_KEY)}/dismiss`)).status).toBe(204);
+  expect(await nextFocus(next)).toEqual({ type: "focus", key: SESSION_KEY, precision: null });
+  expect((await snapshot(base)).focus).toEqual({});
+});
+
+test("a terminal that no longer matches a driver broadcasts a null focus", async () => {
+  const { base } = await start();
+  const next = await openStream(base);
+  await next();
+  await hook(base, "SessionStart", { "X-AW-Bundle-Id": "com.mitchellh.ghostty" });
+  expect(await nextFocus(next)).toEqual({ type: "focus", key: SESSION_KEY, precision: "app" });
+  await hook(base, "UserPromptSubmit", { "X-AW-Tmux-Pane": "%3" });   // no bundle id: replaced wholesale, tmux alone
+  expect(await nextFocus(next)).toEqual({ type: "focus", key: SESSION_KEY, precision: null });
+  expect((await snapshot(base)).focus).toEqual({});
+});
+
+test("a restarted app shows the focus of reloaded terminals", async () => {
+  const path = `${mkdtempSync(join(tmpdir(), "aw-app-"))}/w.db`;
+  const a = await start({ store: openStore(path) });
+  await hook(a.base, "SessionStart");
+  const b = await start({ store: openStore(path) });
+  expect((await snapshot(b.base)).focus).toEqual({ [SESSION_KEY]: "exact" });
+});
+
+test("off macOS nothing can be focused", async () => {
+  const { run, calls } = runRecorder();
+  const { base } = await start({ run, platform: "linux" });
+  await hook(base, "SessionStart");
+  expect((await snapshot(base)).focus).toEqual({});
+  expect((await send(base, "POST", focusPath())).status).toBe(409);
+  expect(calls).toEqual([]);
+});
+
+test("demo mode: focus is always empty and the endpoint has nothing to focus", async () => {
+  const { run, calls } = runRecorder();
+  const store = openStore(":memory:");
+  store.saveTerminal("demo:demo-1", TERMINAL);                         // even a terminal left in the store is not shown
+  const { base, app } = await start({ run, demo: true, store });
+  await app.inject(ev("session_start", { source: "demo", sessionId: "demo-1" }));
+  const [s] = (await snapshot(base)).sessions;
+  expect(s).toBeDefined();
+  expect((await snapshot(base)).focus).toEqual({});
+  expect((await send(base, "POST", focusPath(s!.key))).status).toBe(409);
+  expect(calls).toEqual([]);
 });

@@ -99,6 +99,8 @@ export type Delta =
   | { type: "focus"; key: string; precision: FocusPrecision | null };
 /** How precisely the server can bring a session's terminal to the front: its own tab or pane, or only its app. */
 export type FocusPrecision = "exact" | "app";
+/** What POST /api/sessions/:key/focus did: how precisely the terminal came to the front, and why not more when it could not. */
+export type FocusResult = { precision: "exact" | "app"; note?: string };
 export type Snapshot = {
   serverTime: number; demo: boolean; characters: Character[]; repos: Repo[]; sessions: Session[]; settings: Settings; shop: ShopState;
   focus: Record<string, FocusPrecision>;   // by session key; a session not listed cannot be focused
