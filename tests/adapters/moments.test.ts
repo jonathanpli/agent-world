@@ -43,6 +43,15 @@ const table: [string, boolean, MomentKind | null][] = [
   ["cd git commit", false, null],
   ["", false, null],
   ["", true, null],
+  ["git add . && \\\n  git commit -m x", false, "commit"],
+  ["git -C x \\\n commit -m y", false, "commit"],
+  ["npm test \\\n  -- --run", false, "tests_passed"],
+  ["git add . && \\\r\n git commit -m x", false, "commit"],
+  ["echo hi # ; git commit -m x", false, null],
+  ["# git commit -m x", false, null],
+  ["echo a#b && git commit -m x", false, "commit"],
+  ['git commit -m "fix #12"', false, "commit"],
+  ["echo hi # note\ngit commit -m x", false, "commit"],
 ];
 
 describe("momentFor", () => {

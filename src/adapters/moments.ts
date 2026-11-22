@@ -26,9 +26,14 @@ function simpleCommands(command: string): string[][] {
       }
       word = (word ?? "") + text;
       i = j + 1;
+    } else if (c === "\\" && (command[i + 1] === "\n" || command.startsWith("\r\n", i + 1))) {
+      i += command[i + 1] === "\n" ? 2 : 3;   // line continuation: nothing
     } else if (c === "\\" && i + 1 < command.length) {
       word = (word ?? "") + command[i + 1];
       i += 2;
+    } else if (c === "#" && word === null) {
+      const nl = command.indexOf("\n", i);   // comment: the newline itself still ends the command
+      i = nl === -1 ? command.length : nl;
     } else if (c === "<" && command.startsWith("<<", i) && command[i + 2] !== "<" && command[i + 2] !== "(") {
       let j = i + 2;
       const strip = command[j] === "-";
