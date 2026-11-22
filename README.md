@@ -104,16 +104,143 @@ The **Recap** button in the top bar opens a card for one day, with arrows to the
 
 A day is the server machine's local calendar date (it rolls over at local midnight). Counts are credited when XP is actually credited to a character, so XP held while a session is "Arriving" lands on the day it is released. Recap rows are kept apart from the event log, so they are not pruned after 30 days, and they start from the day this feature ships (no backfill). The API behind the page is local only: `GET /api/snapshot`, `PUT /api/settings` and `GET /api/recap?day=YYYY-MM-DD` (default today).
 
+## Background service, tokens, jump, git moments and shop
+
+Five parts, each working on its own. Nothing here changes what the server sends or accepts from outside: it still binds to `127.0.0.1` only and checks the Host and Origin of every request.
+
+After updating to this version, restart a running server so the database migration runs (a service: `npm run service:install` again, which also restarts it). The migration adds token and git columns to the daily totals and a table of purchases. You do not need to run `hooks:install` again: the hook script is read from this checkout, so the new version is picked up by itself.
+
+### Background service (macOS)
+
+Runs the server at login and restarts it if it stops, using a per-user `launchd` agent (label `com.agent-world.server`).
+
+```bash
+npm run service:install     # builds the client, writes ~/Library/LaunchAgents/com.agent-world.server.plist, loads it
+npm run service:status      # installed or not, running (pid), port, PATH, node path, last 5 log lines
+npm run service:uninstall   # stops it and deletes the plist; ~/.agent-world is left alone
+npm run service:install -- --dry-run   # prints the plist and the steps it would take; changes nothing
+```
+
+- Install refuses on anything but macOS, and when the `node` running it is older than 22.13. The plist pins the absolute path of that `node`, runs the repository's `tsx` on `src/server/main.ts`, and writes output to `~/.agent-world/server.log`. The server cuts that log back to nothing at start when it is over 5 MB.
+- The plist always carries the `PATH` of the shell you installed from (a login item otherwise has almost none). It also carries `AGENT_WORLD_PORT` and `AGENT_WORLD_HOME` when they were set at install time.
+- Running install again replaces the old copy: it stops it first, then checks the port. If the port is held by something else (for example a server you started by hand), install stops and says so. It never ends another process.
+- **What breaks it:** moving or renaming the repository, deleting the `node` version it was installed with (nvm users: uninstalling that Node version), or deleting `node_modules`. Run `npm run service:status` (it shows whether the node path still exists), fix the cause, then run install again. If the service does not come up, read `~/.agent-world/server.log`.
+- Stop a hand-started server (`npm start`) before installing, or the port is busy.
+
+### Tokens and estimated cost
+
+Each session shows the tokens it has used, and an estimated cost.
+
+- Where to look: the inspector's Now tab ("Tokens this session: 1.2M in · 48k out · 9.4M cached · est. $3.10", where "cached" is cache reads), the History tab (lifetime totals for the character) and the Recap card (the day's tokens and cost).
+- **What is counted:** the token usage on the assistant replies in each session's transcript, from the main conversation, each reply once, plus the totals the `Agent` tool reports when a subagent finishes (subagent tokens come from that result, not from the transcript). Input, output, cache reads and cache writes (5-minute and 1-hour writes are priced separately) are counted. Transcripts are read from where the last read stopped, at most 4 MB at a time, and no message text is read from them.
+- **From when:** counting starts when a session's transcript is first seen, so anything used before Agent World knew the session is not counted. There is no backfill. Tokens used while a session is still "Arriving" are held and credited when it joins, like XP.
+- **The cost is an estimate** from public API prices, not your bill. It does not reflect a subscription plan (Pro, Max or Team), where usage is not billed per token. The price table is in `src/shared/prices.ts` and was taken from Anthropic's pricing page on **2026-11-21**; prices change, and it is not updated by itself. Prices are matched on the model id (Haiku, Sonnet, Opus and Fable/Mythos, current and previous generations; Haiku's higher rate applies to a single message whose prompt is over 100 000 tokens). A model that matches no row shows its tokens with no cost, and adds nothing to the dollar totals.
+- To hide every dollar figure, switch off **Show estimated cost** in Settings. Tokens stay.
+- Tokens earn no XP and change no state.
+
+### Jump to session (macOS)
+
+The inspector's Now tab, and the toast for a session that needs you, get a button that brings that session's terminal to the front. It says "Jump to terminal" when the right tab or window can be picked, "Bring terminal to front" when only the app can be raised, and "Jumping…" while it works. If something could only partly be done, a short note says what.
+
+The hook script reports where each session runs (terminal app, iTerm session, tty, tmux pane, cmux workspace) as `X-AW-*` request headers. These identifiers stay on the server: they are kept in the database next to the session and are never sent to the browser, which only learns whether a session can be focused. A session with no usable identifier, a demo session, or any non-macOS host shows no button.
+
+The server picks the first driver that fits, in this order:
+
+| Terminal | Chosen when | What happens | Result |
+|---|---|---|---|
+| cmux | a cmux workspace id was reported | selects the workspace (and the panel) with the `cmux` program, then raises cmux | exact |
+| iTerm2 | an iTerm session id was reported | selects that window, tab and session, raises iTerm | exact |
+| Terminal.app | its bundle id, with a tty | selects the tab with that tty, raises Terminal (without a tty: just raises it) | exact, or app only |
+| Editors | `TERM_PROGRAM=vscode` (VS Code, Cursor, Windsurf, and similar) | opens the session's folder in that app, which raises its window | exact |
+| Anything else | a bundle id was reported | raises that app | app only |
+
+tmux is a layer on top: if the session runs in a tmux pane, the window and pane are selected after the driver above has run (a failure there is ignored).
+
+Details:
+
+- Identifiers must look safe or that driver is skipped: an iTerm id must be a UUID (the part after `w0t0p0:`), and the others must start with a letter or digit. A skipped driver falls through to the next one.
+- The server only runs fixed programs (`osascript`, `open`, `mdfind`, `tmux`, `cmux`) without a shell, each limited to 3 seconds, and a whole jump to 8 seconds. Only one jump per session runs at a time; a second click joins it.
+- **macOS asks for permission once.** The first time a jump needs to script iTerm or Terminal, macOS shows an Automation prompt ("... wants to control iTerm"). Allow it. If you refused it, turn it on under System Settings, Privacy & Security, Automation, for the app that runs the server (your terminal if you started the server by hand; for the service, macOS names whatever it asked about). Until then a jump falls back to raising the window and says macOS may be denying permission.
+- The program to look for is `cmux`; it is searched on `PATH`, and, for a session whose app has cmux's own bundle id (`com.cmuxterm.app` or `com.cmuxterm.app.*`), also inside the cmux app. For any other app only `cmux` on `PATH` is used.
+
+#### Jumping to cmux tabs
+
+cmux support is built from cmux's documentation and **has not been run against a real cmux**. The command names are checked only by tests with the program replaced. Treat it as untested; if it does not work for you, the flag names to adjust are in `src/server/focus.ts`.
+
+cmux has an access mode for its control socket. By default it may accept only programs started from inside a cmux terminal, which a background server is not, so the request can be refused. When that happens, Agent World still raises cmux and the note says the tab could not be selected. Two ways to fix it:
+
+1. In cmux's settings, set the socket access mode to allow external control (not only processes started inside cmux).
+2. Or start the Agent World server with `CMUX_SOCKET_PASSWORD` in its environment. The `cmux` program reads it by itself; Agent World never reads or stores it. The service does not pass it on from your shell, so for the service use option 1 (or add it to the plist's environment by hand).
+
+If the note says the `cmux` program was not found, put it on `PATH` (a service's `PATH` is the one from install time; run install again after changing it), or install cmux in `/Applications`.
+
+cmux also has its own notifications and its own Claude Code hooks. They can run alongside Agent World, but one event may then alert you twice. If so, switch off Agent World's system notifications in Settings (the toasts and ticker are unaffected).
+
+### Git moments
+
+Commits, pull requests and test runs become visible events and a little XP. They are recognised from the shell commands an agent runs (the `Bash` tool), in `src/adapters/moments.ts`. Commands are split on `&&`, `||`, `;`, `|` and newlines; a leading `cd …`, environment assignments (`FOO=1`) and one `rtk` are skipped; `git -C dir …` is understood.
+
+| Moment | Recognised command | When |
+|---|---|---|
+| Commit | `git commit …` (not `--dry-run`) | it succeeded |
+| Push | `git push …` | it succeeded |
+| PR opened | `gh pr create …` | it succeeded |
+| PR merged | `gh pr merge …` | it succeeded |
+| Tests passed | `npm test`, `npm run test…`, `pnpm`/`yarn`/`bun` `test`, `npx vitest`/`jest`/`pytest`/`rspec`/`phpunit`, `vitest`, `jest`, `pytest`, `python -m pytest`, `rspec`, `phpunit`, `go test`, `cargo test`, `dotnet test`, `mvn`/`gradle` `test` | it succeeded |
+| Tests failed | the same runners | the tool failed |
+
+One moment at most per command; if several match, PR merged beats PR opened beats commit beats push beats tests. A commit's subject is shown when the output starts with `[branch hash] subject`.
+
+XP, on top of the normal tool XP, goes to the agent that ran the command (a temp earns none). Past a cap the moment still shows but earns nothing. Caps are per session.
+
+| Moment | XP | Cap |
+|---|---|---|
+| Commit | 10 | 6 per hour |
+| PR opened | 20 | 2 per hour |
+| PR merged | 40 | 2 per hour |
+| Tests passed | 5 | 1 per 5 minutes |
+| Push, tests failed | 0 | none |
+
+Where you see them: always a ticker line ("Ada committed in agent-world: fix the gauge") and an activity line; a short celebration at the desk for a commit or a merged PR, and a brief red flash for a failed test run; a toast only for a merged PR; and a line on the Recap card ("12 commits · 2 PRs merged · 31 test runs, 4 failed"). No system notification. Four new achievements: First Commit (1 commit), Committed (100), Ship It (first merged PR) and Green Machine (50 passing test runs).
+
+Known limits:
+
+- Commands wrapped in `sudo`, `env`, `time` or `bash -c "…"` are not recognised.
+- `gh pr merge --auto` counts as merged, though GitHub merges later.
+- Only what the hook reports is seen: a commit made by hand in another terminal is not.
+- Moments are not counted for anything before this version.
+
+### World shop
+
+XP fills one shared wallet, and coins buy cosmetic upgrades for each world. They change how a world looks and nothing about the game: no XP rate, no cap, no number changes.
+
+- **Wallet** = the XP of all characters (retired ones too) minus the coins spent. It is worked out from those two numbers, so it cannot drift, and it starts at the XP you have already earned. The coin counter is in the top bar; click it to open the Shop.
+- The Shop has one tab per world, six upgrades each (18 in all). Each shows its cost and a Buy button, which asks once. **Purchases are final**: no refunds. A world draws only its own upgrades.
+
+| Cost | Office | Space | Underwater |
+|---|---|---|---|
+| 100 | Desk plants | Hydroponic planter | Sea anemones |
+| 250 | Coffee machine | Drink dispenser | Treasure chest |
+| 500 | Wall art | Star chart display | Sunken statue |
+| 1 000 | Arcade cabinet | Observation dome | Glowing jellyfish swarm |
+| 2 500 | Fish tank | Docked shuttle | Shipwreck |
+| 5 000 | Rooftop skylight | Ringed planet in the window | Friendly whale that passes by |
+
+- "Desk plants" are floor planters standing along the wall, not plants on the desks.
+- The coffee machine, drink dispenser and treasure chest also add a place for characters to stand and chat.
+- Demo mode has its own wallet and purchases in `demo.db`.
+
 ## Privacy and data
 
 Everything stays on your machine. The server binds to `127.0.0.1` only, makes no outside network requests and sends no telemetry.
 
-Data lives in `~/.agent-world/` (`world.db`, and `demo.db` in demo mode). It holds characters, repos, sessions and events. Stored in plain text in that database: prompt text (first 500 characters), the last assistant message of each finished turn (first 500 characters), notification messages (such as "Claude needs your permission to use Bash"), and tool summaries (file path or the first 80 characters of a command). The directory is created readable only by you (0700) and the database file 0600. Events are pruned after 30 days. Daily recap totals (counts per day, character and repo) are stored too and kept. Each session's latest context reading is stored as numbers only. Delete the directory to start over.
+Data lives in `~/.agent-world/` (`world.db`, and `demo.db` in demo mode). It holds characters, repos, sessions and events. Stored in plain text in that database: prompt text (first 500 characters), the last assistant message of each finished turn (first 500 characters), notification messages (such as "Claude needs your permission to use Bash"), and tool summaries (file path or the first 80 characters of a command). The directory is created readable only by you (0700) and the database file 0600. Events are pruned after 30 days. Daily recap totals (counts per day, character and repo) are stored too and kept. Each session's latest context reading is stored as numbers only. Token counts (never message text) are stored per session, character and day; the transcript read position and the terminal identifiers a hook reports are stored on the server too, and never sent to the browser. A shop purchase is a row of upgrade id and time. Delete the directory to start over.
 
 ## Environment variables
 
 - `AGENT_WORLD_PORT`: server port (default 4317, demo 4318). The hook script reads the same variable.
 - `AGENT_WORLD_HOME`: data directory (default `~/.agent-world`).
+- `CMUX_SOCKET_PASSWORD`: not read by Agent World; the `cmux` program reads it when the server runs it (see Jumping to cmux tabs).
 
 ## Adding a theme
 
