@@ -5,21 +5,53 @@ import type { CharState, Effort, Look, Session, Tier } from "../../shared/types"
 import { activeRepos, unboundLabel, type ClientState } from "../state";
 import { contextUsePct, extrasFor, gaugeStep, nextAction, nextCompaction, type ActiveAction, type CompactionWatch, type Extras } from "./actions";
 import { actorAt, safeLayout, sessionsByActor, sessionsByRepo, stepActors, syncActors, type Actor, type Layout } from "./actors";
-import { drawAction, drawCompaction, drawGauge, drawSidekicks } from "./extras";
+import { drawAction, drawCompaction, drawGauge, drawSidekicks, drawUpgrades } from "./extras";
 import { drawBubble, drawChatBubble, drawEdgeButtons, drawPlate, drawSelection, edgeButtons, layoutPlates, plateText } from "./overlay";
 import { createFader } from "./fade";
 import { drawParticles, stepParticles } from "./particles";
 import { rect } from "./pixels";
 import { createSelection } from "./selection";
-import { CHAT_ICONS, createSocial, eligibleForChat, reactionFor, socialSpotsOf, speaker, type Chat } from "./social";
-import { getTheme, safeDraw, THEMES, VIEW, type Particle, type Point, type Rect, type Theme } from "./theme";
+import { CHAT_ICONS, createSocial, eligibleForChat, reactionFor, socialSpotsWith, speaker, type Chat } from "./social";
+import { getTheme, ownedFor, safeDraw, THEMES, VIEW, type Ctx, type Particle, type Point, type Rect, type Theme } from "./theme";
+
+export type BurstKind = "celebrate" | "levelUp" | "commit" | "merge";
+
+/** The moment bursts: the theme's celebrate particles in these colours (a commit green, a merged PR violet). */
+export const BURST_COLORS = { commit: "#5fd38a", merge: "#b58cff" } as const;
+
+/** The particles for a burst at `at`; a theme whose effect throws gives the fallback's. Never throws. */
+export function burstParticles(theme: Theme, fallback: Theme, kind: BurstKind, at: Point, rng: () => number): Particle[] {
+  let out: Particle[] = [];
+  safeDraw(theme, fallback, th => {
+    if (kind === "celebrate" || kind === "levelUp") { out = [...th.effects[kind]({ ...at }, rng)]; return; }
+    const color = BURST_COLORS[kind];
+    out = th.effects.celebrate({ ...at }, rng).map(p => ({ ...p, color }));
+  });
+  return out;
+}
+
+/**
+ * Each screen visible at camera `camX` (the ctx already translated by -camX): its backdrop, then `theme`'s owned
+ * upgrades on it. `owned` is every owned id; only `theme`'s own are passed on, so a fading world never shows another's.
+ */
+export function drawScreens(ctx: Ctx, theme: Theme, fallback: Theme, camX: number, t: number, owned: string[]): void {
+  const mine = ownedFor(theme.id, owned);
+  const first = Math.floor(camX / VIEW.w), lastScreen = Math.ceil(camX / VIEW.w);
+  for (let s = first; s <= lastScreen; s++) {
+    ctx.save(); ctx.translate(s * VIEW.w, 0);
+    safeDraw(theme, fallback, th => th.drawBackdrop(ctx, t, s), ctx);
+    drawUpgrades(ctx, theme, mine, t, s);
+    ctx.restore();
+  }
+}
 
 export type Engine = {
   select(actorId: string | null): void;
   onSelect(cb: (actorId: string | null) => void): void;
   /** Switches theme with a short fade to black and back; `instant` skips the fade (the first theme the server sends). */
   setTheme(id: string, opts?: { instant?: boolean }): void;
-  burst(kind: "celebrate" | "levelUp", actorId: string): void;
+  /** Particles at the actor: celebrate, levelUp, or a moment (commit, merge: the celebrate particles recoloured). */
+  burst(kind: BurstKind, actorId: string): void;
   /** Others in the same repo place as `actorId` react to it finishing or levelling up: a cheer, a glance if working, nothing if it needs you. */
   react(actorId: string): void;
   /** Where an actor stands across its screen, 0 (left edge) to 1 (right edge); null if it has no actor. */
@@ -158,7 +190,7 @@ export function startEngine(canvas: HTMLCanvasElement, state: ClientState): Engi
     const eligible = [...who]
       .filter(([id, w]) => actors.has(id) && nearLounge(id) && eligibleForChat(w.state, w.attention, id === selected))
       .map(([id]) => id);
-    social.step(t, eligible, socialRng, socialSpotsOf(active));
+    social.step(t, eligible, socialRng, socialSpotsWith(active, ownedFor(active.id, state.shop.owned)));
     for (const c of social.chats()) for (const id of [c.a, c.b]) {
       const a = actors.get(id), to = social.targetFor(id);
       if (a !== undefined && to !== null) a.target = to;
@@ -220,12 +252,7 @@ export function startEngine(canvas: HTMLCanvasElement, state: ClientState): Engi
     try {
       ctx.translate(-Math.round(camX), 0);
 
-      const first = Math.floor(camX / VIEW.w), lastScreen = Math.ceil(camX / VIEW.w);
-      for (let s = first; s <= lastScreen; s++) {
-        ctx.save(); ctx.translate(s * VIEW.w, 0);
-        draw(th => th.drawBackdrop(ctx, t, s));
-        ctx.restore();
-      }
+      drawScreens(ctx, theme, fallback, camX, t, state.shop.owned);
       draw(th => th.drawAmbient?.(ctx, t));
 
       const ranked = sessionsByRepo(state);
@@ -319,7 +346,7 @@ export function startEngine(canvas: HTMLCanvasElement, state: ClientState): Engi
     burst: (kind, actorId) => {
       const a = actors.get(actorId);
       if (a === undefined) return;
-      draw(th => { particles.push(...th.effects[kind]({ ...a.pos }, Math.random)); });
+      particles.push(...burstParticles(theme, fallback, kind, a.pos, Math.random));
     },
     react: actorId => {
       const finisher = sessionsByActor(state).get(actorId);

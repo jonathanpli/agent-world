@@ -66,7 +66,31 @@ export function socialSpotsOf(theme: Pick<Theme, "lounge" | "socialSpots">): Poi
   }
 }
 
-const between = (range: readonly [number, number], rng: () => number): number => range[0] + rng() * (range[1] - range[0]);
+/**
+ * socialSpotsOf(theme), plus the extra spot of each owned upgrade that has one, keeping only finite points inside
+ * the lounge (edges included). `owned` must be this theme's own ids (ownedFor). Never throws.
+ */
+export function socialSpotsWith(theme: Pick<Theme, "lounge" | "socialSpots" | "upgradeSocialSpots">, owned: ReadonlySet<string>): Point[] {
+  const spots = socialSpotsOf(theme);
+  try {
+    const listed = theme.upgradeSocialSpots;
+    if (listed === null || typeof listed !== "object") return spots;
+    const l = theme.lounge;
+    for (const id of owned) {
+      if (!Object.hasOwn(listed, id)) continue;
+      const p: unknown = listed[id];
+      if (p === null || typeof p !== "object") continue;
+      const { x, y } = p as { x: unknown; y: unknown };
+      if (typeof x !== "number" || typeof y !== "number" || !Number.isFinite(x) || !Number.isFinite(y)) continue;
+      if (x >= l.x && x <= l.x + l.w && y >= l.y && y <= l.y + l.h) spots.push({ x, y });
+    }
+    return spots;
+  } catch {
+    return socialSpotsOf(theme);
+  }
+}
+
+const between =(range: readonly [number, number], rng: () => number): number => range[0] + rng() * (range[1] - range[0]);
 
 export function createSocial(): Social {
   let chats: Chat[] = [];

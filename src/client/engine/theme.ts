@@ -36,7 +36,17 @@ export type Theme = {
   drawCompaction?(ctx: Ctx, spot: Point, frame: number): void;
   /** Where idle characters meet to chat, inside `lounge`; without them, the lounge centre. */
   socialSpots?: Point[];
+  /** This world's owned shop upgrades (ids from ownedFor), drawn on each visible screen after the backdrop and before the places. */
+  drawUpgrades?(ctx: Ctx, owned: ReadonlySet<string>, t: number, screenIndex: number): void;
+  /** Upgrade id → an extra social spot, inside `lounge`, while that upgrade is owned. */
+  upgradeSocialSpots?: Record<string, Point>;
 };
+
+/** The owned upgrade ids that belong to theme `themeId` (ids are `${theme}.${slug}`). Never throws. */
+export function ownedFor(themeId: string, owned: string[]): ReadonlySet<string> {
+  const prefix = `${themeId}.`;
+  return new Set(Array.isArray(owned) ? owned.filter(id => typeof id === "string" && id.startsWith(prefix)) : []);
+}
 
 export const THEMES: Theme[] = [office, space, underwater];
 

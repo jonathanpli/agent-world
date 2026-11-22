@@ -74,8 +74,9 @@ function plainCompaction(ctx: Ctx, spot: Point, frame: number): void {
 }
 
 /** The engine's plain look for every optional extra; a theme that leaves one out gets this. */
-export const DEFAULTS: Required<Pick<Theme, "drawAction" | "drawSidekick" | "drawContextGauge" | "drawCompaction">> = {
+export const DEFAULTS: Required<Pick<Theme, "drawAction" | "drawSidekick" | "drawContextGauge" | "drawCompaction" | "drawUpgrades">> = {
   drawAction: plainAction, drawSidekick: plainSidekick, drawContextGauge: plainGauge, drawCompaction: plainCompaction,
+  drawUpgrades: () => {},                                                // a world without upgrade art shows nothing extra
 };
 
 /** `t` without its extras, so every extra drawn with it is the engine default. Cached per theme. */
@@ -83,7 +84,7 @@ const plainOf = new WeakMap<Theme, Theme>();
 function enginePlain(t: Theme): Theme {
   let p = plainOf.get(t);
   if (p === undefined) {
-    const { drawAction: _a, drawSidekick: _s, drawContextGauge: _g, drawCompaction: _c, ...rest } = t;
+    const { drawAction: _a, drawSidekick: _s, drawContextGauge: _g, drawCompaction: _c, drawUpgrades: _u, ...rest } = t;
     p = { ...rest, id: `${t.id} (engine defaults)` };
     plainOf.set(t, p);
   }
@@ -99,6 +100,11 @@ export function drawGauge(ctx: Ctx, theme: Theme, spot: Point, step: 0 | 1 | 2 |
 
 export function drawAction(ctx: Ctx, theme: Theme, spot: Point, kind: ToolKind, failed: boolean, frame: number): void {
   safeDraw(theme, enginePlain(theme), th => (th.drawAction ?? DEFAULTS.drawAction)(ctx, spot, kind, failed, frame), ctx);
+}
+
+/** `owned` must be this theme's own ids (ownedFor); if its drawUpgrades throws, nothing extra draws. */
+export function drawUpgrades(ctx: Ctx, theme: Theme, owned: ReadonlySet<string>, t: number, screenIndex: number): void {
+  safeDraw(theme, enginePlain(theme), th => (th.drawUpgrades ?? DEFAULTS.drawUpgrades)(ctx, owned, t, screenIndex), ctx);
 }
 
 export function drawCompaction(ctx: Ctx, theme: Theme, spot: Point, frame: number): void {

@@ -95,6 +95,20 @@ for (const theme of THEMES) test(`${theme.id}: every optional extra it has draws
   }
 });
 
+for (const theme of THEMES) test(`${theme.id}: drawUpgrades (when it has one) draws with none, one and all six owned`, async () => {
+  const { UPGRADES } = await import("../../src/shared/shop");
+  const mine = UPGRADES.filter(u => u.theme === theme.id).map(u => u.id);
+  expect(mine).toHaveLength(6);
+  const ctx = mockCtx();
+  for (const owned of [[], [mine[0]!], [mine[5]!], mine]) for (const screen of [0, 1, 2]) for (const t of [0, 0.7, 13.3]) {
+    expect(() => theme.drawUpgrades?.(ctx, new Set(owned), t, screen)).not.toThrow();
+  }
+  for (const [id, p] of Object.entries(theme.upgradeSocialSpots ?? {})) {
+    expect(mine).toContain(id);
+    expect(p.x >= theme.lounge.x && p.x <= theme.lounge.x + theme.lounge.w && p.y >= theme.lounge.y && p.y <= theme.lounge.y + theme.lounge.h).toBe(true);
+  }
+});
+
 test("the engine defaults draw without throwing", () => {
   expect(() => runExtras(DEFAULTS, mockCtx())).not.toThrow();
   expect(() => drawSidekicks(mockCtx(), getTheme("office"), { x: 60, y: 80 }, sks(5), null, 9_000, 1)).not.toThrow();
