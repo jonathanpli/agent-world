@@ -53,7 +53,7 @@ select, button {
 }
 
 button { cursor: pointer; }
-#open-recap { margin-left: auto; }
+#open-shop { margin-left: auto; font-variant-numeric: tabular-nums; }
 #open-settings { font-size: 16px; line-height: 1; padding: 4px 8px; }
 
 .attention:empty { display: none; }
@@ -300,6 +300,34 @@ table.history .num { text-align: right; font-variant-numeric: tabular-nums; }
 .recap-mvp { display: flex; align-items: center; gap: 8px; }
 .recap-sprite { image-rendering: pixelated; }
 .recap-streak { color: var(--accent); font-weight: 600; }
+
+/* ---- shop dialog ---- */
+#shop {
+  width: min(520px, calc(100vw - 32px));
+  padding: 0;
+  color: var(--text);
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  box-shadow: 0 20px 60px rgb(0 0 0 / 60%);
+}
+#shop::backdrop { background: rgb(10 6 14 / 60%); }
+.shop-card { display: flex; flex-direction: column; gap: 12px; padding: 18px 20px; }
+.shop-head { display: flex; align-items: baseline; justify-content: space-between; }
+.shop-head h2 { margin: 0; }
+.shop-balance { color: var(--accent); font-weight: 700; font-variant-numeric: tabular-nums; }
+.shop-tabs { display: flex; gap: 6px; }
+.shop-tab.active { border-color: var(--accent); color: var(--accent); }
+.shop-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 6px; }
+.shop-item { display: grid; grid-template-columns: 1fr 70px 84px; align-items: center; gap: 12px; padding: 8px 10px; border: 1px solid var(--line); border-radius: 8px; }
+.shop-item.owned { border-color: var(--accent); }
+.shop-info { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.shop-info small { color: var(--warn); }
+.shop-cost { text-align: right; font-variant-numeric: tabular-nums; font-weight: 600; }
+.shop-item.poor .shop-cost { color: var(--dim); }
+.shop-buy { width: 100%; }
+.shop-buy:disabled { opacity: 0.45; cursor: not-allowed; }
+.shop-owned { text-align: center; color: var(--accent); font-weight: 700; }
 
 .attention { color: var(--warn); font-weight: 600; }
 

@@ -1,4 +1,5 @@
 import { CONFIG } from "../shared/config";
+import type { ShopState } from "../shared/shop";
 import type { Character, Delta, Recap, Settings, Snapshot } from "../shared/types";
 
 type Handlers = { onSnapshot(s: Snapshot): void; onDeltas(d: Delta[]): void; onStatus(connected: boolean): void };
@@ -43,5 +44,6 @@ export const api = {
   ack: (key: string): Promise<void> => call("POST", `/api/sessions/${encodeURIComponent(key)}/ack`),
   dismiss: (key: string): Promise<void> => call("POST", `/api/sessions/${encodeURIComponent(key)}/dismiss`),
   recap: (day?: string): Promise<Recap> => call("GET", day === undefined ? "/api/recap" : `/api/recap?day=${encodeURIComponent(day)}`),
+  buy: (id: string): Promise<ShopState> => call("POST", "/api/shop/buy", { id }),
   putSettings: (patch: Partial<Settings>): Promise<Settings> => call("PUT", "/api/settings", patch),
 };

@@ -8,6 +8,7 @@ import { mount as mountInspector } from "./ui/inspector";
 import { localDay, mount as mountRecap, nudgeText, shouldNudge, spriteBounds } from "./ui/recap";
 import { mount as mountRoster } from "./ui/roster";
 import { mount as mountSettings } from "./ui/settings";
+import { coinLabel, mount as mountShop } from "./ui/shop";
 import { mount as mountTicker } from "./ui/ticker";
 import { mount as mountToasts } from "./ui/toasts";
 import type { Tier } from "../shared/types";
@@ -23,6 +24,8 @@ const attention = $("attention");
 const inspectorRoot = $("inspector");
 const settingsDialog = $<HTMLDialogElement>("settings");
 const recapDialog = $<HTMLDialogElement>("recap");
+const shopDialog = $<HTMLDialogElement>("shop");
+const shopButton = $("open-shop");
 
 const engine = startEngine(canvas, state);
 let selected: string | null = null;
@@ -58,6 +61,7 @@ function drawSprite(cv: HTMLCanvasElement, characterId: string): void {
   ctx.imageSmoothingEnabled = false;
   ctx.drawImage(work, b.x, b.y, b.w, b.h, 0, 0, b.w, b.h);
 }
+const shop = mountShop(shopDialog, { state });
 const recap = mountRecap(recapDialog, { state, drawSprite });
 const NUDGE_KEY = "agent-world:recap-nudge";
 
@@ -88,6 +92,7 @@ themeSelect.addEventListener("change", () => {
   });
 });
 
+shopButton.addEventListener("click", () => shop.open());
 $("open-recap").addEventListener("click", () => recap.open());
 $("open-settings").addEventListener("click", () => {
   settings.render();
@@ -116,6 +121,8 @@ function sync(): void {
   inspector.render();
   ticker.render();
   settings.render();
+  shopButton.textContent = coinLabel(state.shop);
+  shop.render();
   dockInspector();
 }
 
