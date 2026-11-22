@@ -45,6 +45,25 @@ export const OFFICE = {
   fail: { bg: "#5a1820", flash: "#e8443a", mark: "#ffffff", spark: ["#ffe066", "#ffb02e", "#ffffff"], shake: "#ffffff" },
   bin: { body: "#7d8796", bodyL: "#a3adbb", rim: "#5b6472" },
   intern: { skin: "#f2c9a0", hair: "#6b4a2f", shirt: "#8fc3e8", shirtS: "#6a9fc8", pants: "#3d4366", lanyard: "#e0503c", badge: "#fffaf0", board: "#a87442", puff: "#ffffff" },
+  // shop upgrades (upgrades.ts)
+  upgrades: {
+    planter: { pots: ["#c96b40", "#ece4d4", "#5f7fa8"], snake: "#5f9a4a", snakeL: "#9ccf6a" },
+    frame: "#c9973e", frameL: "#e8c066",
+    art: {
+      sky: "#9fd3f0", lake: "#3f7fd6", sun: "#ffd75a", hill: "#5fae5a", hillD: "#3f8a4a", path: "#e9d3b0",
+      canvas: "#f7f3ea", red: "#e0503c", blue: "#3f6fc6", yellow: "#f2c53d", teal: "#5fb3b0",
+    },
+    espresso: { chrome: "#c3c8d2", chromeL: "#eef1f6", chromeD: "#8e95a3", top: "#5b5b6a", accent: "#d9453b", gauge: "#fffaf0", cart: "#9a6a44", cartD: "#74492c" },
+    arcade: {
+      body: "#5b3a8c", bodyL: "#7d58b5", bodyD: "#3e2466", marquee: ["#ff5d73", "#ffd23f", "#3bceac"],
+      screen: "#101830", ship: "#7cf29a", alien: "#ff9fb8", shot: "#ffffff", stick: "#e8443a", buttons: ["#ffd23f", "#5aa9e6"], coin: "#ff9f1c",
+    },
+    tank: {
+      water: "#5fb8e0", waterL: "#9fdcf4", waterD: "#3f93c4", gravel: "#d8c49a", gravelD: "#a8946a",
+      weed: "#4fa860", weedD: "#3a8a4c", stand: "#5a3622", standL: "#74492c", fish: ["#ff8c2a", "#ffd23f", "#ff5d73"], bubble: "#ffffff",
+    },
+    skylight: { glass: ["#a8dbf4", "#dcf1fa"], light: "#fff4d6", mote: "#ffffff" },
+  },
   confetti: ["#ff5d73", "#ffd23f", "#3bceac", "#5aa9e6", "#c77dff", "#ff9f1c"],
   sparkle: ["#ffe066", "#fff3b0", "#ffd23f", "#ffffff"],
   codeScrollHz: 5,

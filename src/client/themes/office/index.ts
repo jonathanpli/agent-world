@@ -8,6 +8,7 @@ import { chair, drawWorkSpot } from "./desks";
 import { drawAction, drawCompaction, drawContextGauge, drawSidekick, socialSpots } from "./extras";
 import { OFFICE } from "./palette";
 import { AREA, drawBackdrop, drawPlace, LOUNGE, PLACE } from "./room";
+import { drawUpgrades, upgradeSocialSpots } from "./upgrades";
 
 /** Places on a grid sized to the count, the last row centred; each has two rows of three desks. */
 const placeFor = (index: number, count: number): Place => placeOnGrid(AREA, PLACE, index, count);
@@ -105,4 +106,6 @@ export const office: Theme = {
   drawContextGauge,
   drawCompaction,
   socialSpots,
+  drawUpgrades,
+  upgradeSocialSpots,
 };
