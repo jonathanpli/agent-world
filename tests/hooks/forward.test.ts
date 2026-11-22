@@ -1,5 +1,5 @@
 import { spawn, spawnSync } from "node:child_process";
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readdirSync, statSync, symlinkSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { createServer, type Server } from "node:http";
@@ -8,6 +8,8 @@ import { afterEach, expect, test } from "vitest";
 
 /** The script under test; AW_FORWARD_SCRIPT points the suite at a candidate before it replaces the live hook. */
 const SCRIPT = process.env.AW_FORWARD_SCRIPT ?? "hooks/forward.sh";
+// a run against a candidate says so once, so its output shows which file passed
+if (process.env.AW_FORWARD_SCRIPT !== undefined) console.log(`forwarder suite: testing ${resolve(SCRIPT)}`);
 
 let server: Server | undefined;
 afterEach(async () => {
@@ -174,4 +176,37 @@ test("with every variable set it still exits 0 silently when nothing is listenin
   expect(r.status).toBe(0);
   expect(r.stdout).toBe("");
   expect(r.stderr).toBe("");
+});
+
+/**
+ * Runs the forwarder with a fake `curl` that only writes its arguments, one per line, to a file: no request is made to any
+ * port (4317 belongs to the owner's live server). Resolves with the URL curl was given, or null when curl never ran.
+ */
+async function urlFor(port: string | undefined): Promise<{ url: string | null; status: number | null; out: string }> {
+  const dir = bin(null);
+  const log = join(mkdtempSync(join(tmpdir(), "aw-curl-")), "args");
+  rmSync(join(dir, "curl"));
+  writeFileSync(join(dir, "curl"), `#!/bin/sh\nfor a in "$@"; do printf '%s\\n' "$a"; done > '${log}.tmp' && mv '${log}.tmp' '${log}'\n`);
+  chmodSync(join(dir, "curl"), 0o755);
+  const env: Record<string, string> = { PATH: `${dir}:/bin:/usr/bin` };
+  if (port !== undefined) env.AGENT_WORLD_PORT = port;
+  const r = spawnSync("/bin/sh", [resolve(SCRIPT)], { input: "{}", env, encoding: "utf8" });
+  const deadline = Date.now() + 2000;
+  while (!existsSync(log) && Date.now() < deadline) await new Promise(res => setTimeout(res, 20));
+  const url = existsSync(log) ? readFileSync(log, "utf8").split("\n").find(a => a.startsWith("http")) ?? null : null;
+  return { url, status: r.status, out: r.stdout + r.stderr };
+}
+
+test("AGENT_WORLD_PORT is used only when it is 1 to 5 digits; anything else means 4317", async () => {
+  const ingest = (port: string) => `http://127.0.0.1:${port}/ingest/claude-code`;
+  for (const [port, expected] of [["4399", "4399"], ["1", "1"], ["65535", "65535"], [undefined, "4317"]] as const) {
+    const r = await urlFor(port);
+    expect(r).toEqual({ url: ingest(expected), status: 0, out: "" });
+  }
+  for (const port of ["80@evil", "", "99999999", "4399 ", " 4399", "4399/x", "43a9", "evil.example", "-1", "123456", "4399\n"]) {
+    const r = await urlFor(port);
+    expect(r.status).toBe(0);
+    expect(r.out).toBe("");
+    expect(r.url).toBe(ingest("4317"));                       // the default port, never a host or port taken from the value
+  }
 });

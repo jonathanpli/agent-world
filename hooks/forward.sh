@@ -15,6 +15,12 @@ aw_t=$( { ps -o tty= -p "$PPID"; } 2>/dev/null ) || aw_t=
 aw_t=${aw_t#"${aw_t%%[! ]*}"}
 aw_t=${aw_t%"${aw_t##*[! ]}"}
 aw_tmux_socket=${TMUX%%,*}
+# the port only when it is 1 to 5 digits: anything else could name another host or path in the URL
+aw_port=${AGENT_WORLD_PORT-}
+case $aw_port in
+  [0-9] | [0-9][0-9] | [0-9][0-9][0-9] | [0-9][0-9][0-9][0-9] | [0-9][0-9][0-9][0-9][0-9]) ;;
+  *) aw_port=4317 ;;
+esac
 
 set --
 aw_bundle "$__CFBundleIdentifier" && set -- "$@" -H "X-AW-Bundle-Id: $__CFBundleIdentifier"
@@ -29,5 +35,5 @@ aw_id "$CMUX_PANEL_ID" && set -- "$@" -H "X-AW-Cmux-Panel: $CMUX_PANEL_ID"
 aw_socket "$CMUX_SOCKET_PATH" && set -- "$@" -H "X-AW-Cmux-Socket: $CMUX_SOCKET_PATH"
 
 (printf '%s' "$payload" | curl -q -s -m 1 --noproxy '*' -X POST -H 'Content-Type: application/json' "$@" --data-binary @- \
-  "http://127.0.0.1:${AGENT_WORLD_PORT:-4317}/ingest/claude-code" >/dev/null 2>&1 &) >/dev/null 2>&1
+  "http://127.0.0.1:$aw_port/ingest/claude-code" >/dev/null 2>&1 &) >/dev/null 2>&1
 exit 0
