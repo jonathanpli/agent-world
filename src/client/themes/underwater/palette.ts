@@ -45,4 +45,19 @@ export const SEA = {
     segs: ["#e8443a", "#f2902e", "#f2d23a", "#5cc85a"], needle: "#0f2033", hot: "#ff3a2e",
   },
   coralHead: { c: "#d9706a", d: "#a84a4a", l: "#ffb0a0", polyp: "#fff0d8" },
+  // shop upgrades
+  upgrades: {
+    anemones: [
+      { c: "#ff6fc0", d: "#c8408e", l: "#ffd0ec" }, { c: "#ff9a4a", d: "#cc6a24", l: "#ffd8b0" },
+      { c: "#b77aff", d: "#8650d0", l: "#e4ccff" },
+    ],
+    clownStripe: "#ffffff",
+    statue: { c: "#a7b5a6", d: "#748676", l: "#d4ddcf", moss: "#5f9a52", crack: "#4f5f55", gold: "#d9b84a" },
+    jellies: [
+      { bell: "#ff8ae6", rim: "#d24cbc", l: "#ffe2fa", glow: "#ffc8f4" }, { bell: "#8ff0ff", rim: "#3cbad6", l: "#eaffff", glow: "#c8fbff" },
+      { bell: "#c69aff", rim: "#8a5ae0", l: "#f0e4ff", glow: "#e2d0ff" },
+    ],
+    wreck: { sail: "#d8ccaa", sailD: "#ab9f7e", hole: "#2a1c12", weed: "#4f9a4a", lamp: "#ffd86a" },
+    whale: { c: "#3f6896", d: "#2c4d74", l: "#6a92c0", belly: "#d6e2ec", groove: "#a8bccd", spot: "#9cb8d6" },
+  },
 } as const;

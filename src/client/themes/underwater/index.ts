@@ -8,6 +8,7 @@ import { gearFor } from "./gear";
 import { SEA } from "./palette";
 import { AREA, bubble, drawAmbient, drawBackdrop, drawPlace, LOUNGE, PLACE } from "./scenery";
 import { drawWorkSpot, penAt, scooter } from "./sites";
+import { drawUpgrades, upgradeSocialSpots } from "./upgrades";
 
 const placeFor = (index: number, count: number): Place => placeOnGrid(AREA, PLACE, index, count);
 
@@ -121,4 +122,6 @@ export const underwater: Theme = {
   drawContextGauge,
   drawCompaction,
   socialSpots,
+  drawUpgrades,
+  upgradeSocialSpots,
 };
