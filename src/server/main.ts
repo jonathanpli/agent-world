@@ -5,6 +5,7 @@ import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { CONFIG } from "../shared/config";
 import { serverEnv } from "./env";
+import { truncateLog } from "./logTruncate";
 import { nodeVersionProblem } from "./nodeVersion";
 
 // None of the static imports above need Node 22; node:sqlite is only loaded by the dynamic imports below, after this.
@@ -30,6 +31,7 @@ const { createDemo } = await import("../adapters/demo");
 
 const demo = process.argv.includes("--demo");
 const { port, home, warnings } = serverEnv(process.env, demo, homedir());
+truncateLog(join(home, "server.log"), 5_000_000);
 for (const w of warnings) console.warn(w);
 const clientDir = fileURLToPath(new URL("../../dist/client", import.meta.url));
 
