@@ -6,7 +6,8 @@ export const LOOK: Look = { body: "#4a8fe0", skin: "#f1c9a1", hairStyle: 0, hair
 export function char(id: string, over: Partial<Character> = {}): Character {
   return {
     id, name: id.toUpperCase(), tier: 2, look: LOOK, xp: 0, createdAt: 0, lastActiveAt: 0, retired: false,
-    repoXp: {}, stats: { tasks: 0, tools: 0, compactions: 0, sidekicks: 0 }, achievements: {}, ...over,
+    repoXp: {}, stats: { tasks: 0, tools: 0, compactions: 0, sidekicks: 0, commits: 0, prsOpened: 0, prsMerged: 0, testRuns: 0, testFails: 0 }, achievements: {},
+    usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, cacheWrite1h: 0, costMicros: 0 }, ...over,
   };
 }
 
@@ -18,8 +19,10 @@ export function session(key: string, characterId: string | null, repoId: string,
   return {
     key, source: "t", sessionId: key, characterId, tempLook: characterId === null ? LOOK : null, repoId,
     state: "working", stateSince: 0, model: null, tier: 2, effort: "medium",
-    tierKnown: true, graceSince: null, pendingXp: 0, pendingStats: { tasks: 0, tools: 0, compactions: 0, sidekicks: 0, failures: 0 }, startedAt: 0, lastEventAt: 0,
-    task: null, lastSummary: null, attention: false, activity: [], sidekicks: [], lastTool: null, context: null, ...over,
+    tierKnown: true, graceSince: null, pendingXp: 0, pendingStats: { tasks: 0, tools: 0, compactions: 0, sidekicks: 0, failures: 0, commits: 0, prsOpened: 0, prsMerged: 0, testRuns: 0, testFails: 0 }, startedAt: 0, lastEventAt: 0,
+    task: null, lastSummary: null, attention: false, activity: [], sidekicks: [], lastTool: null, context: null,
+    usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, cacheWrite1h: 0, costMicros: 0 },
+    pendingUsage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, cacheWrite1h: 0, costMicros: 0 }, moments: {}, ...over,
   };
 }
 

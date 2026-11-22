@@ -2,7 +2,7 @@ import { chmodSync, closeSync, mkdirSync, openSync } from "node:fs";
 import { dirname } from "node:path";
 import { DatabaseSync, type SQLInputValue } from "node:sqlite";
 import { CONFIG } from "../shared/config";
-import type { AgentEvent, Character, Delta, Recap, Repo, Session, Settings } from "../shared/types";
+import type { AgentEvent, Character, Delta, Recap, Repo, Session, Settings, UsageTotals } from "../shared/types";
 import type { WorldInit } from "../core/world";
 import { MIGRATIONS } from "./migrations";
 import { buildRecap, localDay, TEMP_ID } from "./recap";
@@ -20,8 +20,10 @@ export type Store = {
 type Row = Record<string, SQLInputValue>;
 
 /** Counters a row stored before they existed reads as 0. */
-const NO_STATS = { tasks: 0, tools: 0, compactions: 0, sidekicks: 0 };
+const NO_STATS = { tasks: 0, tools: 0, compactions: 0, sidekicks: 0, commits: 0, prsOpened: 0, prsMerged: 0, testRuns: 0, testFails: 0 };
 const NO_PENDING = { ...NO_STATS, failures: 0 };
+/** Token totals are not stored yet (Task 3 adds them): every loaded row starts from zero. */
+const noUsage = (): UsageTotals => ({ input: 0, output: 0, cacheRead: 0, cacheWrite: 0, cacheWrite1h: 0, costMicros: 0 });
 /** The settings-table key that holds the learned context limits; not a setting, so never part of `Settings`. */
 const LEARNED_LIMITS_KEY = "learnedLimits";
 type Extras = Pick<Session, "context" | "sidekicks" | "lastTool">;
@@ -147,6 +149,7 @@ export function openStore(path: string): Store {
       id: r.id as string, name: r.name as string, tier: r.tier as Character["tier"], look: JSON.parse(r.look as string),
       xp: r.xp as number, createdAt: r.created_at as number, lastActiveAt: r.last_active_at as number, retired: r.retired === 1,
       repoXp: repoXp.get(r.id as string) ?? {}, stats: { ...NO_STATS, ...JSON.parse(r.stats as string) }, achievements: achievements.get(r.id as string) ?? {},
+      usage: noUsage(),
     }));
     const repos = (db.prepare("SELECT * FROM repos ORDER BY rowid").all() as Row[]).map((r): Repo => ({
       id: r.id as string, path: r.path as string, name: r.name as string, createdAt: r.created_at as number,
@@ -163,6 +166,7 @@ export function openStore(path: string): Store {
         startedAt: r.started_at as number, lastEventAt: r.last_event_at as number, task: r.task as string | null,
         lastSummary: r.last_summary as string | null, attention: r.attention === 1, activity: JSON.parse(r.activity as string),
         context: extras.context ?? null, sidekicks: extras.sidekicks ?? [], lastTool: extras.lastTool ?? null,
+        usage: noUsage(), pendingUsage: noUsage(), moments: {},
       };
     });
     const settings: Record<string, unknown> = { ...CONFIG.defaultSettings };

@@ -622,7 +622,7 @@ test("close() leaves no pending timers", async () => {
 test("GET /api/recap: today by default, a given day, 400 on a malformed day, 403 for a foreign Host or Origin", async () => {
   const NOW = new Date(2026, 5, 10, 12).getTime();
   const { base, store } = await start({ now: () => NOW });
-  store.persist([{ type: "credit", at: NOW, characterId: null, repoId: "r", tasks: 2, tools: 3, failures: 0, xp: 0, levels: 0, compactions: 0, sidekicks: 0 }]);
+  store.persist([{ type: "credit", at: NOW, characterId: null, repoId: "r", tasks: 2, tools: 3, failures: 0, xp: 0, levels: 0, compactions: 0, sidekicks: 0, commits: 0, prsOpened: 0, prsMerged: 0, testRuns: 0, testFails: 0, usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, cacheWrite1h: 0, costMicros: 0 } }]);
   const res = await fetch(`${base}/api/recap`);
   expect(res.status).toBe(200);
   const r = await res.json() as { day: string; today: string; totals: { tasks: number }; streak: number };

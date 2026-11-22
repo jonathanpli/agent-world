@@ -8,7 +8,7 @@ import type { Character, Delta } from "../../src/shared/types";
 const zero = { tasks: 0, tools: 0, failures: 0, xp: 0, levels: 0, compactions: 0, sidekicks: 0 };
 const at = (day: string, h = 12) => new Date(`${day}T${String(h).padStart(2, "0")}:00:00-05:00`).getTime();
 const credit = (day: string, characterId: string | null, repoId: string, over: Partial<typeof zero> = {}): Delta =>
-  ({ type: "credit", at: at(day), characterId, repoId, ...zero, ...over });
+  ({ type: "credit", at: at(day), characterId, repoId, ...zero, commits: 0, prsOpened: 0, prsMerged: 0, testRuns: 0, testFails: 0, usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, cacheWrite1h: 0, costMicros: 0 }, ...over });
 const char = (id: string, name: string, retired = false): Delta => ({
   type: "character", character: { id, name, tier: 1, look: {}, xp: 0, createdAt: 0, lastActiveAt: 0, retired, repoXp: {}, achievements: {},
     stats: { tasks: 0, tools: 0, compactions: 0, sidekicks: 0 } } as unknown as Character });

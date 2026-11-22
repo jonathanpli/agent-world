@@ -10,7 +10,8 @@ function c(id: string, tier: Tier, over: Partial<Character> = {}): Character {
     id, name: id, tier,
     look: { body: "#e05555", skin: "#fbe0c8", hairStyle: 0, hairColor: "#2b2118", hat: null, accessory: null },
     xp: 0, createdAt: 0, lastActiveAt: 0, retired: false, repoXp: {},
-    stats: { tasks: 0, tools: 0, compactions: 0, sidekicks: 0 }, achievements: {}, ...over,
+    stats: { tasks: 0, tools: 0, compactions: 0, sidekicks: 0, commits: 0, prsOpened: 0, prsMerged: 0, testRuns: 0, testFails: 0 }, achievements: {},
+    usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, cacheWrite1h: 0, costMicros: 0 }, ...over,
   };
 }
 

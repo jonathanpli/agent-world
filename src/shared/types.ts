@@ -7,6 +7,10 @@ export type EventKind = "session_start" | "prompt" | "tool" | "needs_input" | "t
 export type MomentKind = "commit" | "push" | "pr_opened" | "pr_merged" | "tests_passed" | "tests_failed";
 /** cacheWrite is the 5-minute cache writes only and cacheWrite1h the 1-hour ones: disjoint, so their sum is all cache writes. */
 export type UsageDelta = { input: number; output: number; cacheRead: number; cacheWrite: number; cacheWrite1h: number };
+/** Token totals and their estimated API cost in millionths of a US dollar (an integer; unpriced models add 0). */
+export type UsageTotals = UsageDelta & { costMicros: number };
+/** Counters a character keeps and a session holds until it credits them. testRuns counts passed and failed runs. */
+export type MomentStats = { commits: number; prsOpened: number; prsMerged: number; testRuns: number; testFails: number };
 export type AgentEvent = {
   source: string; sessionId: string; repoPath: string; at: number; kind: EventKind;
   model?: string; tier?: Tier; effort?: Effort; detail?: Record<string, string>;
@@ -25,7 +29,8 @@ export type Look = { body: string; skin: string; hairStyle: number; hairColor: s
 export type Character = {
   id: string; name: string; tier: Tier; look: Look; xp: number; createdAt: number; lastActiveAt: number;
   retired: boolean; repoXp: Record<string, number>;          // repoId → xp
-  stats: { tasks: number; tools: number; compactions: number; sidekicks: number }; achievements: Record<string, number>; // id → when
+  stats: { tasks: number; tools: number; compactions: number; sidekicks: number } & MomentStats; achievements: Record<string, number>; // id → when
+  usage: UsageTotals;                // lifetime
 };
 export type Repo = { id: string; path: string; name: string; createdAt: number };
 export type Sidekick = { id: string; type: string; since: number; lastAt: number };
@@ -51,20 +56,27 @@ export type Session = {
   tierKnown: boolean;                // false until an event carries a tier or the grace period ends; unbound until then
   graceSince: number | null;         // when the grace clock started: the first prompt (or first event if seen mid-session)
   pendingXp: number;                 // earned while the tier is unknown, credited on binding
-  pendingStats: { tasks: number; tools: number; compactions: number; sidekicks: number; failures: number };
+  pendingStats: { tasks: number; tools: number; compactions: number; sidekicks: number; failures: number } & MomentStats;
   startedAt: number; lastEventAt: number; task: string | null; lastSummary: string | null;
   attention: boolean; activity: ActivityLine[];
   sidekicks: Sidekick[];             // running subagents, oldest first
   lastTool: LastTool | null;         // the most recent tool event, successful or failed
   context: ContextInfo | null;       // null until the first reading
+  usage: UsageTotals;                // this session's tokens and cost
+  pendingUsage: UsageTotals;         // the part of `usage` not yet credited to a character (held while "Arriving")
+  moments: Partial<Record<MomentKind, number[]>>;   // when each capped moment earned XP, inside its cap window, oldest first
 };
 export type Settings = {
   theme: string; notifyNeedsInput: boolean; notifyDone: boolean; sound: boolean; rosterCap: number;
   notifyContext: boolean; contextWarnPct: number;
   contextLimitOverride: number | null;   // tokens; null = estimate the limit
+  showCost: boolean;                     // false hides every dollar figure
 };
-export type NoticeKind = "needs_input" | "done" | "level_up" | "achievement" | "context_low";
-export type Notice = { id: string; at: number; kind: NoticeKind; sessionKey: string | null; characterId: string | null; characterName: string; repoName: string | null; text: string };
+export type NoticeKind = "needs_input" | "done" | "level_up" | "achievement" | "context_low" | "moment";
+export type Notice = {
+  id: string; at: number; kind: NoticeKind; sessionKey: string | null; characterId: string | null; characterName: string; repoName: string | null; text: string;
+  moment?: MomentKind;               // set on "moment" notices
+};
 export type Delta =
   | { type: "character"; character: Character }
   | { type: "repo"; repo: Repo }
@@ -74,7 +86,8 @@ export type Delta =
   | { type: "notice"; notice: Notice }
   /** What one call credited, at the moment it was credited (held "Arriving" XP lands in the binding call). */
   | { type: "credit"; at: number; characterId: string | null; repoId: string;      // null = temp
-      tasks: number; tools: number; failures: number; xp: number; levels: number; compactions: number; sidekicks: number }
+      tasks: number; tools: number; failures: number; xp: number; levels: number; compactions: number; sidekicks: number;
+      commits: number; prsOpened: number; prsMerged: number; testRuns: number; testFails: number; usage: UsageTotals }
   /** An automatic compaction raised the learned context limit of `model` (tokens). */
   | { type: "learned_limit"; model: string; limit: number };
 export type Snapshot = { serverTime: number; demo: boolean; characters: Character[]; repos: Repo[]; sessions: Session[]; settings: Settings };

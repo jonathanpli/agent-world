@@ -5,6 +5,12 @@ export const CONFIG = {
     tasksMany: 100, toolsMany: 1000, reposNeeded: 5, levelHigh: 10, levelTop: 25, legendRepoXp: 6000,
     nightHours: [0, 4], earlyHours: [5, 6], marathonMs: 14_400_000,
     sidekicksMany: 25,
+    commitsMany: 100, greenRuns: 50,
+  },
+  /** XP per moment on top of the tool's own, and each capped moment's [rewards, window ms] per session. */
+  moments: {
+    xp: { commit: 10, pr_opened: 20, pr_merged: 40, tests_passed: 5 },
+    caps: { commit: [6, 3_600_000], pr_opened: [2, 3_600_000], pr_merged: [2, 3_600_000], tests_passed: [1, 300_000] },
   },
   levelBase: 50,
   levelExponent: 1.6,
@@ -93,5 +99,6 @@ export const CONFIG = {
   defaultSettings: {
     theme: "office", notifyNeedsInput: true, notifyDone: true, sound: false, rosterCap: 12,
     notifyContext: true, contextWarnPct: 80, contextLimitOverride: null as number | null,
+    showCost: true,
   },
 } as const;

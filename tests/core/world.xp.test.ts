@@ -11,7 +11,7 @@ test("xp per event, credited overall and per repo", () => {
   const w = newWorld(); w.apply(ev("session_start"));
   w.apply(ev("prompt")); w.apply(ev("tool")); w.apply(ev("task_done"));
   const c = chars(w)[0]; const repoId = sess(w)[0].repoId;
-  expect(c.xp).toBe(32); expect(c.repoXp[repoId]).toBe(32); expect(c.stats).toEqual({ tasks: 1, tools: 1, compactions: 0, sidekicks: 0 });
+  expect(c.xp).toBe(32); expect(c.repoXp[repoId]).toBe(32); expect(c.stats).toEqual({ tasks: 1, tools: 1, compactions: 0, sidekicks: 0, commits: 0, prsOpened: 0, prsMerged: 0, testRuns: 0, testFails: 0 });
 });
 
 test("tool xp caps at 60 per minute per session", () => {
@@ -41,7 +41,7 @@ test("temps earn nothing", () => {
   expect(sess(w).find(s => s.sessionId === "s2")!.characterId).toBeNull();
   expect(chars(w)).toHaveLength(1);
   expect(chars(w)[0].xp).toBe(before);
-  expect(chars(w)[0].stats).toEqual({ tasks: 0, tools: 0, compactions: 0, sidekicks: 0 });
+  expect(chars(w)[0].stats).toEqual({ tasks: 0, tools: 0, compactions: 0, sidekicks: 0, commits: 0, prsOpened: 0, prsMerged: 0, testRuns: 0, testFails: 0 });
 });
 
 test("level up emits one notice", () => {
@@ -79,5 +79,5 @@ test("character delta is emitted once per event, after the notices' changes", ()
 
 test("snapshot stays exactly the shared shape", () => {
   const w = newWorld(); w.apply(ev("tool"));
-  expect(Object.keys(sess(w)[0]).sort()).toEqual(["activity", "attention", "characterId", "context", "effort", "graceSince", "key", "lastEventAt", "lastSummary", "lastTool", "model", "pendingStats", "pendingXp", "repoId", "sessionId", "sidekicks", "source", "startedAt", "state", "stateSince", "task", "tempLook", "tier", "tierKnown"]);
+  expect(Object.keys(sess(w)[0]).sort()).toEqual(["activity", "attention", "characterId", "context", "effort", "graceSince", "key", "lastEventAt", "lastSummary", "lastTool", "model", "moments", "pendingStats", "pendingUsage", "pendingXp", "repoId", "sessionId", "sidekicks", "source", "startedAt", "state", "stateSince", "task", "tempLook", "tier", "tierKnown", "usage"]);
 });

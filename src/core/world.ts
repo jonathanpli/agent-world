@@ -1,7 +1,11 @@
 import { CONFIG } from "../shared/config";
 import { isValidLook } from "../shared/cosmetics";
 import { formatTokens } from "../shared/format";
-import type { AgentEvent, Character, ContextInfo, Delta, Look, Notice, NoticeKind, Repo, Session, Settings, Snapshot, Tier, ToolKind } from "../shared/types";
+import { costMicros } from "../shared/prices";
+import type {
+  AgentEvent, Character, ContextInfo, Delta, Look, MomentKind, MomentStats, Notice, NoticeKind, Repo, Session, Settings, Snapshot, Tier, ToolKind,
+  UsageTotals,
+} from "../shared/types";
 import { pickCharacter } from "./assign";
 import { earned, ACHIEVEMENTS } from "./achievements";
 import { levelForXp } from "./levels";
@@ -26,7 +30,22 @@ const TEMP_NAME = "Temp";
 /** How notices name a session that is still waiting for its tier (and so has no character yet). */
 export const ARRIVAL_NAME = "A new arrival";
 const clone = <T>(x: T): T => structuredClone(x);
-const emptyStats = (): Session["pendingStats"] => ({ tasks: 0, tools: 0, compactions: 0, sidekicks: 0, failures: 0 });
+const noMoments = (): MomentStats => ({ commits: 0, prsOpened: 0, prsMerged: 0, testRuns: 0, testFails: 0 });
+const emptyStats = (): Session["pendingStats"] => ({ tasks: 0, tools: 0, compactions: 0, sidekicks: 0, failures: 0, ...noMoments() });
+const emptyUsage = (): UsageTotals => ({ input: 0, output: 0, cacheRead: 0, cacheWrite: 0, cacheWrite1h: 0, costMicros: 0 });
+const USAGE_KEYS = ["input", "output", "cacheRead", "cacheWrite", "cacheWrite1h", "costMicros"] as const;
+const addUsage = (to: UsageTotals, u: UsageTotals): void => { for (const k of USAGE_KEYS) to[k] += u[k]; };
+const hasUsage = (u: UsageTotals): boolean => USAGE_KEYS.some(k => u[k] > 0);
+/** The counter each moment adds to (both test moments are runs; a failed one is also a failure); push counts nowhere. */
+const MOMENT_COUNTS: Record<MomentKind, (keyof MomentStats)[]> = {
+  commit: ["commits"], push: [], pr_opened: ["prsOpened"], pr_merged: ["prsMerged"], tests_passed: ["testRuns"], tests_failed: ["testRuns", "testFails"],
+};
+const MOMENT_VERB: Record<MomentKind, (name: string) => string> = {
+  commit: n => `${n} committed`, push: n => `${n} pushed`, pr_opened: n => `${n} opened a pull request`,
+  pr_merged: n => `${n} merged a pull request`, tests_passed: n => `${n}'s tests passed`, tests_failed: n => `${n}'s tests failed`,
+};
+type CappedMoment = keyof typeof CONFIG.moments.xp;
+const isCapped = (m: MomentKind): m is CappedMoment => m in CONFIG.moments.xp;
 const TOOL_KINDS: ReadonlySet<string> = new Set<ToolKind>(["edit", "shell", "read", "web", "delegate", "other"]);
 const toolKind = (k: string | undefined): ToolKind => (k !== undefined && TOOL_KINDS.has(k) ? k as ToolKind : "other");
 
@@ -85,7 +104,7 @@ export function createWorld(init: WorldInit, deps: WorldDeps): World {
         c = {
           id: deps.newId(), name: randomName(deps.rng, taken), tier: session.tier, look: randomLook(deps.rng),
           xp: 0, createdAt: at, lastActiveAt: at, retired: false, repoXp: {},
-          stats: { tasks: 0, tools: 0, compactions: 0, sidekicks: 0 }, achievements: {},
+          stats: { tasks: 0, tools: 0, compactions: 0, sidekicks: 0, ...noMoments() }, achievements: {}, usage: emptyUsage(),
         };
         characters.set(c.id, c);
         out.push(characterDelta(c));
@@ -110,7 +129,7 @@ export function createWorld(init: WorldInit, deps: WorldDeps): World {
       graceSince: ev.tier === undefined && ev.kind !== "session_start" ? ev.at : null,
       pendingXp: 0, pendingStats: emptyStats(),
       startedAt: ev.at, lastEventAt: ev.at, task: null, lastSummary: null, attention: false, activity: [],
-      sidekicks: [], lastTool: null, context: null,
+      sidekicks: [], lastTool: null, context: null, usage: emptyUsage(), pendingUsage: emptyUsage(), moments: {},
     };
     sessions.set(key, session);
     if (session.tierKnown) assign(session, ev.at, out);
@@ -133,7 +152,7 @@ export function createWorld(init: WorldInit, deps: WorldDeps): World {
    * default tier and credited first, so nothing is lost; one that earned nothing just leaves, adding no character.
    */
   function endSession(s: Session, at: number, out: Delta[]): void {
-    const held = s.pendingXp > 0 || Object.values(s.pendingStats).some(n => n > 0);
+    const held = s.pendingXp > 0 || Object.values(s.pendingStats).some(n => n > 0) || hasUsage(s.pendingUsage);
     if (!s.tierKnown && held) {
       bindArrival(s, s.tier, at, out);
       const c = s.characterId === null ? undefined : characters.get(s.characterId);
@@ -155,11 +174,56 @@ export function createWorld(init: WorldInit, deps: WorldDeps): World {
   }
 
   /** A notice about session `s`, naming its character (or "Temp", or the arrival); `text` gets that name. */
-  function sessionNotice(s: Session, kind: NoticeKind, at: number, repo: Repo | undefined, text: (name: string) => string): Delta {
+  function sessionNotice(s: Session, kind: NoticeKind, at: number, repo: Repo | undefined, text: (name: string) => string, extra: Pick<Notice, "moment"> = {}): { type: "notice"; notice: Notice } {
     const c = s.characterId === null ? undefined : characters.get(s.characterId);
     const name = c?.name ?? (s.tierKnown ? TEMP_NAME : ARRIVAL_NAME);
-    const n: Notice = { id: deps.newId(), at, kind, sessionKey: s.key, characterId: c?.id ?? null, characterName: name, repoName: repo?.name ?? null, text: text(name) };
+    const n: Notice = { id: deps.newId(), at, kind, sessionKey: s.key, characterId: c?.id ?? null, characterName: name, repoName: repo?.name ?? null, text: text(name), ...extra };
     return { type: "notice", notice: n };
+  }
+
+  /** The moment notice for `ev` and its text, e.g. "Ada committed in agent-world: fix the gauge". */
+  function momentNotice(s: Session, moment: MomentKind, ev: AgentEvent, repo: Repo): { type: "notice"; notice: Notice } {
+    const subject = ev.detail?.momentText;
+    const text = (name: string) => `${MOMENT_VERB[moment](name)} in ${repo.name}${subject ? `: ${subject}` : ""}`;
+    return sessionNotice(s, "moment", ev.at, repo, text, { moment });
+  }
+
+  /**
+   * Adds `ev.usage`, priced at `ev.usageModel` or else the session's model (unpriced: tokens at cost 0), to the session's
+   * totals and to what it holds for its character. Returns whether there was any.
+   */
+  function addEventUsage(s: Session, ev: AgentEvent): boolean {
+    if (ev.usage === undefined) return false;
+    const u: UsageTotals = { ...ev.usage, costMicros: costMicros(ev.usageModel ?? s.model ?? undefined, ev.usage, ev.longPrompt === true) ?? 0 };
+    if (!hasUsage(u)) return false;
+    addUsage(s.usage, u);
+    addUsage(s.pendingUsage, u);
+    return true;
+  }
+
+  /** A usage reading for a known session: credited through `settle`; moves no state, attention, XP or lastEventAt. */
+  function applyUsage(s: Session, ev: AgentEvent): Delta[] {
+    if (!addEventUsage(s, ev)) return [];
+    const c = s.characterId === null ? undefined : characters.get(s.characterId);
+    const credited = settle(s, ev.at, false);
+    const out: Delta[] = [...credited];
+    if (c !== undefined && credited.length > 0) out.push(characterDelta(c));
+    out.push(sessionDelta(s));
+    return out;
+  }
+
+  /**
+   * The XP a moment earns this session: its reward while under its cap (rewards earned inside the cap window), else 0.
+   * Earning records the time in `s.moments`, pruned to the window.
+   */
+  function momentXp(s: Session, moment: MomentKind, at: number): number {
+    if (!isCapped(moment)) return 0;
+    const [max, windowMs] = CONFIG.moments.caps[moment];
+    const times = (s.moments[moment] ?? []).filter(t => at - t <= windowMs);
+    const gain = times.length < max ? CONFIG.moments.xp[moment] : 0;
+    if (gain > 0) times.push(at);
+    s.moments[moment] = times;
+    return gain;
   }
 
   function notice(s: Session, kind: "needs_input" | "done", at: number, repo: Repo): Delta[] {
@@ -269,10 +333,16 @@ export function createWorld(init: WorldInit, deps: WorldDeps): World {
   /**
    * Adds what `ev` earns to the session's held XP and counters, then settles them. A session still waiting for its
    * tier holds what it earns; a temp earns no XP but its counters are still credited. A failed tool earns nothing and
-   * counts as a failure. Returns credit and notices only; apply emits the character delta.
+   * counts as a failure. A moment counts always and earns its XP under its cap; a tool's usage (the Agent tool's
+   * subagent totals) is held like the rest. Returns credit and notices only; apply emits the character delta.
    */
   function award(session: Session, ev: AgentEvent): Delta[] {
     const temp = session.tierKnown && session.characterId === null;
+    if (ev.kind === "tool") addEventUsage(session, ev);
+    if (ev.kind === "tool" && ev.moment !== undefined) {
+      for (const k of MOMENT_COUNTS[ev.moment]) session.pendingStats[k]++;
+      if (!temp && ev.failed !== true) session.pendingXp += momentXp(session, ev.moment, ev.at);
+    }
     if (ev.kind === "tool" && ev.failed === true) session.pendingStats.failures++;
     else if (ev.kind === "tool") {
       session.pendingStats.tools++;
@@ -292,28 +362,33 @@ export function createWorld(init: WorldInit, deps: WorldDeps): World {
   }
 
   /**
-   * Credits the session's held XP and counters to its character with level-ups and achievements, through the one path
-   * every award takes, and reports it as one `credit` delta. Held while the tier is unknown. A temp's credit carries
-   * its counters with no XP (held XP is dropped). Returns the credit and notices only.
+   * Credits the session's held XP, counters and usage to its character with level-ups and achievements, through the one
+   * path every award takes, and reports it as one `credit` delta. Held while the tier is unknown. A temp's credit
+   * carries its counters and usage with no XP (held XP is dropped). Returns the credit and notices only.
    */
   function settle(session: Session, at: number, finishedTask: boolean): Delta[] {
     if (!session.tierKnown) return [];
-    const gain = session.pendingXp, stats = session.pendingStats;
+    const gain = session.pendingXp, stats = session.pendingStats, usage = session.pendingUsage;
     session.pendingXp = 0;
     session.pendingStats = emptyStats();
+    session.pendingUsage = emptyUsage();
     const c = session.characterId === null ? undefined : characters.get(session.characterId);
     const credit = {
       type: "credit" as const, at, characterId: c?.id ?? null, repoId: session.repoId,
       tasks: stats.tasks, tools: stats.tools, failures: stats.failures, xp: c === undefined ? 0 : gain, levels: 0,
       compactions: stats.compactions, sidekicks: stats.sidekicks,
+      commits: stats.commits, prsOpened: stats.prsOpened, prsMerged: stats.prsMerged, testRuns: stats.testRuns, testFails: stats.testFails,
+      usage,
     };
-    const counted = credit.xp > 0 || Object.values(stats).some(n => n > 0);
+    const counted = credit.xp > 0 || Object.values(stats).some(n => n > 0) || hasUsage(usage);
     if (!counted) return [];
     if (c === undefined) return [credit];
     c.stats.tools += stats.tools;
     c.stats.tasks += stats.tasks;
     c.stats.compactions += stats.compactions;
     c.stats.sidekicks += stats.sidekicks;
+    for (const k of ["commits", "prsOpened", "prsMerged", "testRuns", "testFails"] as const) c.stats[k] += stats[k];
+    addUsage(c.usage, usage);
 
     const levelBefore = levelForXp(c.xp);
     c.xp += gain;
@@ -348,8 +423,9 @@ export function createWorld(init: WorldInit, deps: WorldDeps): World {
 
     const agentId = ev.kind === "tool" && ev.detail?.agentId ? ev.detail.agentId : null;
     // these never create a session: for an unknown one they do nothing
-    if (s === undefined && (ev.kind === "sub_start" || ev.kind === "sub_end" || ev.kind === "context" || agentId !== null)) return [];
+    if (s === undefined && (ev.kind === "sub_start" || ev.kind === "sub_end" || ev.kind === "context" || ev.kind === "usage" || agentId !== null)) return [];
     if (ev.kind === "context") return s === undefined ? [] : applyContext(s, ev);
+    if (ev.kind === "usage") return s === undefined ? [] : applyUsage(s, ev);
 
     const out: Delta[] = [];
     const repo = repoFor(ev.repoPath, ev.at, out);
@@ -407,6 +483,11 @@ export function createWorld(init: WorldInit, deps: WorldDeps): World {
       const base = ev.detail?.summary ?? ev.detail?.text ?? ev.detail?.reason ?? ev.kind;
       const text = ev.kind === "tool" && ev.failed === true ? `Failed: ${base}` : base;
       s.activity.push({ at: ev.at, kind: ev.kind, text });
+      if (ev.kind === "tool" && ev.moment !== undefined) {
+        const n = momentNotice(s, ev.moment, ev, repo);
+        notices.push(n);
+        s.activity.push({ at: ev.at, kind: "tool", text: n.notice.text });
+      }
       if (s.activity.length > CONFIG.activityMax) s.activity.splice(0, s.activity.length - CONFIG.activityMax);
     }
 
@@ -502,7 +583,7 @@ export function createWorld(init: WorldInit, deps: WorldDeps): World {
       if (o !== null && (!Number.isInteger(o) || o < min)) throw new Error(`contextLimitOverride must be an integer of at least ${min} or null`);
       next.contextLimitOverride = o;
     }
-    for (const k of ["notifyNeedsInput", "notifyDone", "sound", "notifyContext"] as const) {
+    for (const k of ["notifyNeedsInput", "notifyDone", "sound", "notifyContext", "showCost"] as const) {
       if (patch[k] === undefined) continue;
       if (typeof patch[k] !== "boolean") throw new Error(`${k} must be a boolean`);
       next[k] = patch[k];

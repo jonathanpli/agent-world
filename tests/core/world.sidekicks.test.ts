@@ -7,6 +7,7 @@ import { ev, newWorld } from "../helpers/events";
 
 const sess = (w: World) => w.snapshot(0, false).sessions;
 const chars = (w: World) => w.snapshot(0, false).characters;
+const NO_USAGE = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, cacheWrite1h: 0, costMicros: 0 };
 const credits = (ds: Delta[]) => ds.flatMap(d => (d.type === "credit" ? [d] : []));
 
 /** A bound session in the working state. */
@@ -74,7 +75,7 @@ test("a new session has no sidekicks and no last tool", () => {
   const w = newWorld();
   w.apply(ev("session_start"));
   expect(sess(w)[0]).toMatchObject({ sidekicks: [], lastTool: null });
-  expect(chars(w)[0]!.stats).toEqual({ tasks: 0, tools: 0, compactions: 0, sidekicks: 0 });
+  expect(chars(w)[0]!.stats).toEqual({ tasks: 0, tools: 0, compactions: 0, sidekicks: 0, commits: 0, prsOpened: 0, prsMerged: 0, testRuns: 0, testFails: 0 });
 });
 
 test("a failed tool earns nothing, counts a failure, and reads 'Failed: '", () => {
@@ -154,12 +155,13 @@ test("an arriving session holds sidekick counts and credits them on binding", ()
   const held = w.apply(bare("sub_end", { at: 3000, detail: { agentId: "a1", agentType: "Explore" } }));
   expect(credits(held)).toEqual([]);
   expect(chars(w)).toEqual([]);
-  expect(sess(w)[0]!.pendingStats).toEqual({ tasks: 0, tools: 0, compactions: 0, sidekicks: 1, failures: 0 });
+  expect(sess(w)[0]!.pendingStats).toEqual({ tasks: 0, tools: 0, compactions: 0, sidekicks: 1, failures: 0, commits: 0, prsOpened: 0, prsMerged: 0, testRuns: 0, testFails: 0 });
   const ds = w.apply(bare("tool", { at: 4000, tier: 3 }));
   expect(chars(w)[0]!.stats.sidekicks).toBe(1);
   expect(credits(ds)).toEqual([{
     type: "credit", at: 4000, characterId: chars(w)[0]!.id, repoId: sess(w)[0]!.repoId,
     tasks: 0, tools: 1, failures: 0, xp: CONFIG.xp.prompt + CONFIG.xp.tool, levels: 0, compactions: 0, sidekicks: 1,
+    commits: 0, prsOpened: 0, prsMerged: 0, testRuns: 0, testFails: 0, usage: NO_USAGE,
   }]);
 });
 
@@ -176,7 +178,7 @@ test("an arriving session whose only held activity is failures is credited when 
   const w = newWorld();
   w.apply(bare("session_start", { at: 1000 }));
   w.apply(bare("tool", { at: 2000, failed: true }));
-  expect(sess(w)[0]!.pendingStats).toEqual({ tasks: 0, tools: 0, compactions: 0, sidekicks: 0, failures: 1 });
+  expect(sess(w)[0]!.pendingStats).toEqual({ tasks: 0, tools: 0, compactions: 0, sidekicks: 0, failures: 1, commits: 0, prsOpened: 0, prsMerged: 0, testRuns: 0, testFails: 0 });
   const ds = w.apply(bare("session_end", { at: 3000 }));
   expect(credits(ds)).toHaveLength(1);
   expect(credits(ds)[0]).toMatchObject({ failures: 1, tools: 0, xp: 0, characterId: chars(w)[0]!.id });
@@ -219,6 +221,7 @@ test("a temp's credit carries counters with characterId null and no XP", () => {
   expect(credits(ds)).toEqual([{
     type: "credit", at: 2000, characterId: null, repoId: sess(w)[1]!.repoId,
     tasks: 1, tools: 0, failures: 0, xp: 0, levels: 0, compactions: 0, sidekicks: 0,
+    commits: 0, prsOpened: 0, prsMerged: 0, testRuns: 0, testFails: 0, usage: NO_USAGE,
   }]);
   expect(credits(w.apply(ev("prompt", { sessionId: "s2", at: 3000 })))).toEqual([]);
 });

@@ -16,6 +16,10 @@ export const ACHIEVEMENTS: AchievementDef[] = [
   { id: "early_bird", title: "Early Bird", description: "Finish a task between 5am and 7am." },
   { id: "marathon", title: "Marathon", description: "Finish a task in a session over 4 hours old." },
   { id: "delegator", title: "Delegator", description: `${CONFIG.achievements.sidekicksMany} sidekicks finished` },
+  { id: "first_commit", title: "First Commit", description: "Make a commit." },
+  { id: "committed", title: "Committed", description: `Make ${CONFIG.achievements.commitsMany} commits.` },
+  { id: "ship_it", title: "Ship It", description: "Merge a pull request." },
+  { id: "green_machine", title: "Green Machine", description: `Pass ${CONFIG.achievements.greenRuns} test runs.` },
 ];
 
 type Ctx = {
@@ -45,6 +49,10 @@ export function earned(c: Character, ctx: Ctx): string[] {
     early_bird: task && within(hour, A.earlyHours),
     marathon: task && ctx.at - ctx.session.startedAt >= A.marathonMs,
     delegator: c.stats.sidekicks >= A.sidekicksMany,
+    first_commit: c.stats.commits >= 1,
+    committed: c.stats.commits >= A.commitsMany,
+    ship_it: c.stats.prsMerged >= 1,
+    green_machine: c.stats.testRuns - c.stats.testFails >= A.greenRuns,
   };
   return ACHIEVEMENTS.filter(a => met[a.id] && c.achievements[a.id] === undefined).map(a => a.id);
 }

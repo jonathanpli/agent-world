@@ -171,7 +171,7 @@ test("applyDeltas ignores credit and learned_limit deltas", () => {
   applySnapshot(s, snap({ characters: [char("a")], repos: [repo("r")], sessions: [session("ka", "a", "r")] }));
   const before = JSON.stringify([...s.sessions], null, 0) + JSON.stringify([...s.characters]);
   expect(applyDeltas(s, [
-    { type: "credit", at: 0, characterId: "a", repoId: "r", tasks: 1, tools: 1, failures: 0, xp: 5, levels: 0, compactions: 0, sidekicks: 0 },
+    { type: "credit", at: 0, characterId: "a", repoId: "r", tasks: 1, tools: 1, failures: 0, xp: 5, levels: 0, compactions: 0, sidekicks: 0, commits: 0, prsOpened: 0, prsMerged: 0, testRuns: 0, testFails: 0, usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, cacheWrite1h: 0, costMicros: 0 } },
     { type: "learned_limit", model: "m", limit: 500_000 },
   ])).toEqual([]);
   expect(JSON.stringify([...s.sessions]) + JSON.stringify([...s.characters])).toBe(before);

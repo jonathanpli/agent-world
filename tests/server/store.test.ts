@@ -121,7 +121,7 @@ test("sessions saved before the extras migration load with no context, sidekicks
   const store = openStore(path);
   const loaded = store.load().sessions[0]!;
   expect(loaded).toMatchObject({ key: "t:s1", context: null, sidekicks: [], lastTool: null });
-  expect(loaded.pendingStats).toEqual({ tasks: 0, tools: 0, compactions: 0, sidekicks: 0, failures: 0 });
+  expect(loaded.pendingStats).toEqual({ tasks: 0, tools: 0, compactions: 0, sidekicks: 0, failures: 0, commits: 0, prsOpened: 0, prsMerged: 0, testRuns: 0, testFails: 0 });
   store.close();
 });
 
@@ -210,7 +210,7 @@ test("sessions saved before the arriving migration load as known with nothing he
   const store = openStore(path);
   const loaded = store.load().sessions[0]!;
   expect(loaded).toMatchObject({ key: "t:s1", tier: 3, tierKnown: true, pendingXp: 0, graceSince: null, sidekicks: [], lastTool: null });
-  expect(loaded.pendingStats).toEqual({ tasks: 0, tools: 0, compactions: 0, sidekicks: 0, failures: 0 });
+  expect(loaded.pendingStats).toEqual({ tasks: 0, tools: 0, compactions: 0, sidekicks: 0, failures: 0, commits: 0, prsOpened: 0, prsMerged: 0, testRuns: 0, testFails: 0 });
   store.close();
 });
 
@@ -223,13 +223,13 @@ test("characters stored before the compaction and sidekick counters load them as
   db.exec(`UPDATE characters SET stats = '{"tasks":3,"tools":7}'`);
   db.close();
   store = openStore(path);
-  expect(store.load().characters[0]!.stats).toEqual({ tasks: 3, tools: 7, compactions: 0, sidekicks: 0 });
+  expect(store.load().characters[0]!.stats).toEqual({ tasks: 3, tools: 7, compactions: 0, sidekicks: 0, commits: 0, prsOpened: 0, prsMerged: 0, testRuns: 0, testFails: 0 });
   store.close();
 });
 
 test("persist ignores credit deltas", () => {
   const store = openStore(":memory:");
-  const credit = { type: "credit" as const, at: 0, characterId: null, repoId: "r", tasks: 1, tools: 0, failures: 0, xp: 0, levels: 0, compactions: 0, sidekicks: 0 };
+  const credit = { type: "credit" as const, at: 0, characterId: null, repoId: "r", tasks: 1, tools: 0, failures: 0, xp: 0, levels: 0, compactions: 0, sidekicks: 0, commits: 0, prsOpened: 0, prsMerged: 0, testRuns: 0, testFails: 0, usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, cacheWrite1h: 0, costMicros: 0 } };
   expect(() => store.persist([credit])).not.toThrow();
   expect(store.load()).toMatchObject({ characters: [], repos: [], sessions: [] });
   store.close();
@@ -280,7 +280,7 @@ test("a version-3 database opens, gives an empty recap, and records credits afte
   expect(store.recap("2026-06-10", "2026-06-10")).toEqual(
     { day: "2026-06-10", today: "2026-06-10", totals: zero, characters: [], repos: [], mvpCharacterId: null, streak: 0, prevDay: null, nextDay: null });
   const at = new Date(2026, 5, 10, 12).getTime();
-  store.persist([{ type: "credit", at, characterId: "c1", repoId: "r1", ...zero, tasks: 1, xp: 7 }]);
+  store.persist([{ type: "credit", at, characterId: "c1", repoId: "r1", ...zero, commits: 0, prsOpened: 0, prsMerged: 0, testRuns: 0, testFails: 0, usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, cacheWrite1h: 0, costMicros: 0 }, tasks: 1, xp: 7 }]);
   const r = store.recap("2026-06-10", "2026-06-10");
   expect(r.totals).toMatchObject({ tasks: 1, xp: 7 });
   expect(r.characters).toMatchObject([{ characterId: "c1", name: "Ada", xp: 7 }]);
