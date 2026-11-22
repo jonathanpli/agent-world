@@ -1,4 +1,6 @@
-import { readFileSync } from "node:fs";
+import { mkdtempSync, readFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { createServer, request, type IncomingMessage, type Server, type ServerResponse } from "node:http";
 import type { AddressInfo } from "node:net";
 import { Readable } from "node:stream";
@@ -6,12 +8,15 @@ import { afterEach, expect, test, vi } from "vitest";
 import { createApp, type App, type AppOptions } from "../../src/server/app";
 import { openStore, type Store } from "../../src/server/store";
 import type { TranscriptInfo } from "../../src/server/transcript";
+import type { readUsage, UsageBatch, UsageCursor } from "../../src/server/usageReader";
 import { CONFIG } from "../../src/shared/config";
 import type { AgentEvent, Delta, Snapshot } from "../../src/shared/types";
 
 /** A transcript reader that knows only the model, as the model-fallback tests need. */
 const byModel = (read: (path: string) => Promise<string | null>) => async (path: string): Promise<TranscriptInfo> =>
   ({ model: await read(path), contextTokens: null, boundaries: [] });
+/** A usage reader that never finds a transcript: every test that does not ask for usage stays off the file system. */
+const noUsage: typeof readUsage = async (_path, cursor) => ({ cursor: cursor ?? { offset: 0, ids: [] }, batches: [] });
 const fx = (name: string): string => readFileSync(`tests/fixtures/claude-code/${name}.json`, "utf8");
 const SESSION_KEY = `claude-code:${JSON.parse(fx("SessionStart")).session_id}`;
 
@@ -21,7 +26,7 @@ const aborts: AbortController[] = [];
 
 async function start(opts: Partial<AppOptions> = {}): Promise<Running> {
   const store = opts.store ?? openStore(":memory:");
-  const app = createApp({ demo: false, resolveRepo: async p => p, readTranscript: byModel(async () => null), ...opts, store });
+  const app = createApp({ demo: false, resolveRepo: async p => p, readTranscript: byModel(async () => null), readUsage: noUsage, ...opts, store });
   const server = createServer(app.handler);
   await new Promise<void>(r => server.listen(0, "127.0.0.1", r));
   const r = { base: `http://127.0.0.1:${(server.address() as AddressInfo).port}`, app, store, server };
@@ -677,4 +682,90 @@ test("sidekick events and agent-id tools for an unknown session never read the t
   expect((await snapshot(base)).sessions).toEqual([]);
   await app.inject(e("prompt", { text: "hi" }));             // an event that does create the session still reads it
   expect(reads).toBe(1);
+});
+
+/** The context rig's app with an injected usage reader that records its calls and returns `rig.batches`, and a store that records cursors. */
+async function usageRig(path = ":memory:") {
+  vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+  const rig = {
+    t: 1_000_000, calls: [] as { path: string; cursor: UsageCursor | null }[], batches: [] as UsageBatch[],
+    logged: [] as AgentEvent[], saved: [] as [string, UsageCursor][],
+  };
+  const inner = openStore(path);
+  const store: Store = {
+    ...inner,
+    logEvent: e => { rig.logged.push(structuredClone(e)); inner.logEvent(e); },
+    saveCursor: (k, c) => { rig.saved.push([k, structuredClone(c)]); inner.saveCursor(k, c); },
+  };
+  const read: typeof readUsage = async (p, cursor) => {
+    rig.calls.push({ path: p, cursor: structuredClone(cursor) });
+    const next = { offset: (cursor?.offset ?? 0) + 100, ids: [...(cursor?.ids ?? []), `m${rig.calls.length}`] };
+    const batches = rig.batches; rig.batches = [];
+    return { cursor: next, batches };
+  };
+  const r = await start({ store, now: () => rig.t, readTranscript: byModel(async () => null), readUsage: read });
+  const advance = async (ms: number) => { rig.t += ms; await vi.advanceTimersByTimeAsync(ms); await flush(); };
+  const usage = async () => (await snapshot(r.base)).sessions[0]?.usage ?? null;
+  return { ...r, rig, advance, usage };
+}
+
+const tokens = { input: 1_000_000, output: 0, cacheRead: 0, cacheWrite: 0, cacheWrite1h: 0 };
+
+test("a hook payload reads the transcript for usage and injects it, visible as session.usage", async () => {
+  const { base, rig, advance, usage } = await usageRig();
+  await ingest(base, startWithModel); await flush();
+  expect(rig.calls).toEqual([{ path: START.transcript_path, cursor: null }]);
+  expect(await usage()).toEqual({ ...tokens, input: 0, costMicros: 0 });
+  rig.batches = [
+    { model: "claude-haiku-5", longPrompt: false, usage: tokens },
+    { model: "claude-haiku-5", longPrompt: true, usage: tokens },
+  ];
+  await advance(CONFIG.contextReadMs);
+  await ingest(base, fx("PostToolUse")); await flush();
+  expect(rig.calls).toHaveLength(2);
+  expect(await usage()).toEqual({ ...tokens, input: 2_000_000, costMicros: 100_000 + 500_000 });   // Haiku: $0.10 and, over the mark, $0.50 per M input
+});
+
+test("each usage read gets the cursor the last one returned, and the store saves it", async () => {
+  const { base, rig, advance } = await usageRig();
+  await ingest(base, startWithModel); await flush();
+  await advance(CONFIG.contextReadMs);
+  await ingest(base, fx("PostToolUse")); await flush();
+  await advance(CONFIG.contextReadMs);
+  await ingest(base, fx("PostToolUse")); await flush();
+  expect(rig.calls.map(c => c.cursor)).toEqual([null, { offset: 100, ids: ["m1"] }, { offset: 200, ids: ["m1", "m2"] }]);
+  expect(rig.saved).toEqual([
+    [SESSION_KEY, { offset: 100, ids: ["m1"] }], [SESSION_KEY, { offset: 200, ids: ["m1", "m2"] }], [SESSION_KEY, { offset: 300, ids: ["m1", "m2", "m3"] }],
+  ]);
+});
+
+test("usage events never reach store.logEvent", async () => {
+  const { base, rig, advance, usage } = await usageRig();
+  await ingest(base, startWithModel); await flush();
+  rig.batches = [{ model: "claude-opus-5-5", longPrompt: false, usage: tokens }];
+  await advance(CONFIG.contextReadMs);
+  await ingest(base, fx("PostToolUse")); await flush();
+  expect((await usage())?.input).toBe(1_000_000);
+  expect(rig.logged.map(e => e.kind)).toEqual(["session_start", "tool"]);
+});
+
+test("a payload for a session the world does not know reads no usage", async () => {
+  const { base, rig, advance } = await usageRig();
+  await ingest(base, postCompact); await flush();
+  await advance(CONFIG.contextReadMs);
+  expect(rig.calls).toEqual([]);
+  expect(rig.saved).toEqual([]);
+});
+
+test("a restarted app continues from the saved cursor; a removed session's cursor is gone", async () => {
+  const path = `${mkdtempSync(join(tmpdir(), "aw-app-"))}/w.db`;
+  const first = await usageRig(path);
+  await ingest(first.base, startWithModel); await flush();
+  first.app.close();
+  vi.useRealTimers();
+  const second = await usageRig(path);
+  await ingest(second.base, fx("PostToolUse")); await flush();
+  expect(second.rig.calls.map(c => c.cursor)).toEqual([{ offset: 100, ids: ["m1"] }]);
+  expect((await send(second.base, "POST", `/api/sessions/${encodeURIComponent(SESSION_KEY)}/dismiss`)).status).toBe(204);
+  expect(second.store.loadServerState().has(SESSION_KEY)).toBe(false);
 });

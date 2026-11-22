@@ -11,10 +11,12 @@ import { isDay, localDay } from "./recap";
 import { createRepoResolver } from "./repoResolver";
 import type { Store } from "./store";
 import { readTranscript as readTranscriptFile, type TranscriptInfo } from "./transcript";
+import { readUsage as readUsageFile, type UsageCursor } from "./usageReader";
 
 export type AppOptions = {
   store: Store; demo: boolean; now?: () => number; staticDir?: string;
   resolveRepo?: (cwd: string) => Promise<string>; readTranscript?: (transcriptPath: string) => Promise<TranscriptInfo>;
+  readUsage?: typeof readUsageFile;
 };
 export type App = {
   handler: (req: IncomingMessage, res: ServerResponse) => void;
@@ -76,17 +78,25 @@ function within<T>(p: Promise<T>, ms: number, fallback: T): Promise<T> {
   });
 }
 
+const sameCursor = (a: UsageCursor | null, b: UsageCursor): boolean =>
+  a !== null && a.offset === b.offset && a.ids.length === b.ids.length && a.ids.every((id, i) => id === b.ids[i]);
 const isRecord = (v: unknown): v is Record<string, unknown> => typeof v === "object" && v !== null && !Array.isArray(v);
 const nonEmpty = (v: unknown): v is string => typeof v === "string" && v !== "";
 
-/** A session's context reads: when the last started, the trailing read waiting for the window to end, and the last reading sent. */
-type ContextReads = { lastAt: number; timer: ReturnType<typeof setTimeout> | undefined; path: string; repoPath: string; sent: string | null };
+/**
+ * A session's scheduled transcript reads: when the last started, the trailing read waiting for the window to end, the last
+ * context reading sent, and the chain of usage reads (one at a time, so two never count from the same cursor).
+ */
+type ContextReads = {
+  lastAt: number; timer: ReturnType<typeof setTimeout> | undefined; path: string; repoPath: string; sent: string | null; usage: Promise<void>;
+};
 
 export function createApp(opts: AppOptions): App {
   const { store, demo } = opts;
   const now = opts.now ?? Date.now;
   const resolveRepo = opts.resolveRepo ?? createRepoResolver();
   const readTranscript = opts.readTranscript ?? readTranscriptFile;
+  const readUsage = opts.readUsage ?? readUsageFile;
   const world = createWorld(store.load(), { rng: Math.random, newId: randomUUID });
 
   /**
@@ -98,6 +108,9 @@ export function createApp(opts: AppOptions): App {
   /** sessionKey → when the transcript was last read for a model, and how many reads so far (capped at CONFIG.modelRetryMax). */
   const modelTries = new Map<string, { at: number; count: number }>();
   const contextReads = new Map<string, ContextReads>();
+  /** sessionKey → where its transcript's usage reading stands; a session without one is read for the first time next. */
+  const usageCursors = new Map<string, UsageCursor>();
+  for (const [key, { cursor }] of store.loadServerState()) if (cursor !== null) usageCursors.set(key, cursor);
   let closed = false;
   const streams = new Set<ServerResponse>();
   let queue: Promise<void> = Promise.resolve();
@@ -107,7 +120,9 @@ export function createApp(opts: AppOptions): App {
     store.persist(deltas);
     for (const d of deltas) {
       if (d.type === "session") sessionWantsModel.set(d.session.key, wantsModel(d.session));
-      else if (d.type === "session_removed") { sessionWantsModel.delete(d.key); modelTries.delete(d.key); forgetContextReads(d.key); }
+      else if (d.type === "session_removed") {
+        sessionWantsModel.delete(d.key); modelTries.delete(d.key); forgetContextReads(d.key); usageCursors.delete(d.key);
+      }
     }
     // credit and learned limits are for the store only: browsers do not use them
     const shown = deltas.filter(d => d.type !== "credit" && d.type !== "learned_limit");
@@ -124,7 +139,7 @@ export function createApp(opts: AppOptions): App {
     const key = `${ev.source}:${ev.sessionId}`;
     const transcriptPath = ev.detail?.transcriptPath;
     // events that never create a session do not read for a model when the session is unknown
-    const createsSession = !(ev.kind === "sub_start" || ev.kind === "sub_end" || ev.kind === "context" || (ev.kind === "tool" && !!ev.detail?.agentId));
+    const createsSession = !(ev.kind === "sub_start" || ev.kind === "sub_end" || ev.kind === "context" || ev.kind === "usage" || (ev.kind === "tool" && !!ev.detail?.agentId));
     const wants = sessionWantsModel.get(key) ?? createsSession;
     if (ev.model === undefined && ev.tier === undefined && wants && transcriptPath !== undefined) {
       const t = now();
@@ -140,7 +155,7 @@ export function createApp(opts: AppOptions): App {
       }
     }
     if (ev.detail !== undefined) delete ev.detail.transcriptPath;
-    if (ev.kind !== "context") store.logEvent(ev);      // context readings are not logged (the demo injects them)
+    if (ev.kind !== "context" && ev.kind !== "usage") store.logEvent(ev);      // transcript readings are not logged (the demo injects them)
     commit(world.apply(ev));
   }
 
@@ -168,7 +183,7 @@ export function createApp(opts: AppOptions): App {
     const key = `${source}:${sessionId}`;
     if (closed || !sessionWantsModel.has(key)) return;   // the map holds every session the world knows
     let r = contextReads.get(key);
-    if (r === undefined) { r = { lastAt: -Infinity, timer: undefined, path, repoPath, sent: null }; contextReads.set(key, r); }
+    if (r === undefined) { r = { lastAt: -Infinity, timer: undefined, path, repoPath, sent: null, usage: Promise.resolve() }; contextReads.set(key, r); }
     r.path = path; r.repoPath = repoPath;
     if (r.timer !== undefined) return;
     const wait = r.lastAt + CONFIG.contextReadMs - now();
@@ -177,9 +192,16 @@ export function createApp(opts: AppOptions): App {
     r.timer = setTimeout(() => { reads.timer = undefined; void readContext(source, sessionId, reads); }, wait);
   }
 
-  /** Reads the transcript and, when the reading or its boundaries changed since the last one sent, applies a `context` event (not logged). */
+  /** One scheduled read: the context reading and, after any usage read still running, the new usage. */
   async function readContext(source: string, sessionId: string, r: ContextReads): Promise<void> {
     r.lastAt = now();
+    r.usage = r.usage.then(() => readSessionUsage(source, sessionId, r))
+      .catch(e => { console.error("agent-world: usage read failed", e); });
+    await Promise.all([readContextReading(source, sessionId, r), r.usage]);
+  }
+
+  /** Reads the transcript and, when the reading or its boundaries changed since the last one sent, applies a `context` event (not logged). */
+  async function readContextReading(source: string, sessionId: string, r: ContextReads): Promise<void> {
     const info = await within(readTranscript(r.path), CONFIG.modelReadTimeoutMs, null);
     if (closed || info === null || info.contextTokens === null) return;
     const reading = `${info.contextTokens}|${info.boundaries.map(b => b.uuid).join(",")}`;
@@ -189,6 +211,28 @@ export function createApp(opts: AppOptions): App {
       source, sessionId, repoPath: r.repoPath, at: now(), kind: "context", contextTokens: info.contextTokens, boundaries: info.boundaries,
     };
     await enqueue(() => commit(world.apply(ev)));
+  }
+
+  /**
+   * Reads the transcript's new usage from the session's cursor and applies one `usage` event per batch (not logged), then
+   * keeps and saves the new cursor. Nothing is applied or saved once the app closed or the session was removed meanwhile.
+   */
+  async function readSessionUsage(source: string, sessionId: string, r: ContextReads): Promise<void> {
+    const key = `${source}:${sessionId}`;
+    const before = usageCursors.get(key) ?? null;
+    const { cursor, batches } = await readUsage(r.path, before);
+    const current = () => !closed && contextReads.get(key) === r;
+    if (!current()) return;
+    await enqueue(() => {
+      if (!current()) return;
+      for (const b of batches) {
+        commit(world.apply({
+          source, sessionId, repoPath: r.repoPath, at: now(), kind: "usage", usage: b.usage, usageModel: b.model, ...(b.longPrompt && { longPrompt: true }),
+        }));
+      }
+      usageCursors.set(key, cursor);
+      if (!sameCursor(before, cursor)) store.saveCursor(key, cursor);
+    });
   }
 
   function tick(): void {

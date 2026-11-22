@@ -44,6 +44,8 @@ export const CONFIG = {
   modelGraceMs: 15_000,                           // a session with no tier this long after its first prompt joins at defaultTier
   defaultTier: 2,
   transcriptTailBytes: 262_144,
+  /** The incremental transcript usage reader: bytes per read, counted message ids remembered, and the long-prompt mark (tokens). */
+  usage: { readMaxBytes: 4_000_000, idsMax: 50, longPromptTokens: 100_000 },
   gitTimeoutMs: 1_000,
   repoResolveTimeoutMs: 2_500,
   modelReadTimeoutMs: 1_000,

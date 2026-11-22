@@ -24,28 +24,30 @@ export function isDay(s: string): boolean {
 }
 
 export const TEMP_ID = "temp";
-const COLS = ["tasks", "tools", "failures", "xp", "levels", "compactions", "sidekicks"] as const;
-const SUMS = COLS.map(c => `SUM(${c}) AS ${c}`).join(", ");
-const totalsOf = (r: Record<string, unknown>): RecapTotals => ({
-  tasks: Number(r.tasks), tools: Number(r.tools), failures: Number(r.failures), xp: Number(r.xp),
-  levels: Number(r.levels), compactions: Number(r.compactions), sidekicks: Number(r.sidekicks),
-});
+/** The daily columns and the RecapTotals key each sums into. */
+const COLS = [
+  ["tasks", "tasks"], ["tools", "tools"], ["failures", "failures"], ["xp", "xp"], ["levels", "levels"],
+  ["compactions", "compactions"], ["sidekicks", "sidekicks"], ["commits", "commits"], ["prs_opened", "prsOpened"],
+  ["prs_merged", "prsMerged"], ["test_runs", "testRuns"], ["test_fails", "testFails"], ["input", "input"], ["output", "output"],
+  ["cache_read", "cacheRead"], ["cache_write", "cacheWrite"], ["cache_write_1h", "cacheWrite1h"], ["cost_micros", "costMicros"],
+] as const satisfies readonly (readonly [string, keyof RecapTotals])[];
+const sums = (table: string) => COLS.map(([c, k]) => `SUM(${table}${c}) AS ${k}`).join(", ");
+const totalsOf = (r: Record<string, unknown>): RecapTotals =>
+  Object.fromEntries(COLS.map(([, k]) => [k, Number(r[k] ?? 0)])) as RecapTotals;
 
 export function buildRecap(db: DatabaseSync, day: string, today: string): Recap {
   const one = (sql: string, ...args: string[]) => db.prepare(sql).get(...args) as Record<string, unknown> | undefined;
-  const totalRow = one(`SELECT ${SUMS} FROM daily WHERE day = ?`, day);
-  const totals = totalRow === undefined || totalRow.tasks === null
-    ? { tasks: 0, tools: 0, failures: 0, xp: 0, levels: 0, compactions: 0, sidekicks: 0 } : totalsOf(totalRow);
+  const totals = totalsOf(one(`SELECT ${sums("")} FROM daily WHERE day = ?`, day) ?? {});   // no rows: every SUM is NULL, read as 0
 
   const characters = (db.prepare(
-    `SELECT d.character_id AS id, COALESCE(c.name, d.character_id) AS name, ${SUMS.replace(/SUM\((\w+)\)/g, "SUM(d.$1)")}
+    `SELECT d.character_id AS id, COALESCE(c.name, d.character_id) AS name, ${sums("d.")}
      FROM daily d LEFT JOIN characters c ON c.id = d.character_id
      WHERE d.day = ? AND d.character_id <> ? GROUP BY d.character_id`).all(day, TEMP_ID) as Record<string, unknown>[])
     .map(r => ({ characterId: String(r.id), name: String(r.name), ...totalsOf(r) }))
     .sort((a, b) => b.xp - a.xp || b.tasks - a.tasks || a.name.localeCompare(b.name));
 
   const repos = (db.prepare(
-    `SELECT d.repo_id AS id, COALESCE(r.name, d.repo_id) AS name, ${SUMS.replace(/SUM\((\w+)\)/g, "SUM(d.$1)")}
+    `SELECT d.repo_id AS id, COALESCE(r.name, d.repo_id) AS name, ${sums("d.")}
      FROM daily d LEFT JOIN repos r ON r.id = d.repo_id WHERE d.day = ? GROUP BY d.repo_id`).all(day) as Record<string, unknown>[])
     .map(r => ({ repoId: String(r.id), name: String(r.name), ...totalsOf(r) }))
     .sort((a, b) => b.tasks - a.tasks || b.tools - a.tools || a.name.localeCompare(b.name));

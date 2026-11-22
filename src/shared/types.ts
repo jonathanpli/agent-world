@@ -92,7 +92,7 @@ export type Delta =
   | { type: "learned_limit"; model: string; limit: number };
 export type Snapshot = { serverTime: number; demo: boolean; characters: Character[]; repos: Repo[]; sessions: Session[]; settings: Settings };
 
-export type RecapTotals = { tasks: number; tools: number; failures: number; xp: number; levels: number; compactions: number; sidekicks: number };
+export type RecapTotals = { tasks: number; tools: number; failures: number; xp: number; levels: number; compactions: number; sidekicks: number } & MomentStats & UsageTotals;
 export type Recap = {
   day: string; today: string; totals: RecapTotals;
   characters: ({ characterId: string; name: string } & RecapTotals)[];   // xp desc; excludes temp

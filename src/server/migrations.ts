@@ -46,4 +46,22 @@ export const MIGRATIONS: string[] = [
     sidekicks INTEGER NOT NULL DEFAULT 0, PRIMARY KEY (day, character_id, repo_id)
   );
   `,
+  // Git and test moments, tokens and estimated cost on the daily recap; a character's lifetime usage as one JSON object;
+  // server-only session data (transcript usage cursor, terminal identifiers); shop purchases. Older rows read as zero / none.
+  `
+  ALTER TABLE daily ADD COLUMN commits INTEGER NOT NULL DEFAULT 0;
+  ALTER TABLE daily ADD COLUMN prs_opened INTEGER NOT NULL DEFAULT 0;
+  ALTER TABLE daily ADD COLUMN prs_merged INTEGER NOT NULL DEFAULT 0;
+  ALTER TABLE daily ADD COLUMN test_runs INTEGER NOT NULL DEFAULT 0;
+  ALTER TABLE daily ADD COLUMN test_fails INTEGER NOT NULL DEFAULT 0;
+  ALTER TABLE daily ADD COLUMN input INTEGER NOT NULL DEFAULT 0;
+  ALTER TABLE daily ADD COLUMN output INTEGER NOT NULL DEFAULT 0;
+  ALTER TABLE daily ADD COLUMN cache_read INTEGER NOT NULL DEFAULT 0;
+  ALTER TABLE daily ADD COLUMN cache_write INTEGER NOT NULL DEFAULT 0;
+  ALTER TABLE daily ADD COLUMN cache_write_1h INTEGER NOT NULL DEFAULT 0;
+  ALTER TABLE daily ADD COLUMN cost_micros INTEGER NOT NULL DEFAULT 0;
+  ALTER TABLE characters ADD COLUMN extras TEXT NOT NULL DEFAULT '{}';
+  CREATE TABLE session_server (key TEXT PRIMARY KEY, cursor TEXT, terminal TEXT);
+  CREATE TABLE purchases (id TEXT PRIMARY KEY, bought_at INTEGER NOT NULL);
+  `,
 ];

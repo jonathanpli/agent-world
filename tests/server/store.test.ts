@@ -278,12 +278,114 @@ test("a version-3 database opens, gives an empty recap, and records credits afte
   expect(store.load()).toMatchObject({ characters: [{ id: "c1" }], sessions: [{ key: "t:s1" }] });
   const zero = { tasks: 0, tools: 0, failures: 0, xp: 0, levels: 0, compactions: 0, sidekicks: 0 };
   expect(store.recap("2026-06-10", "2026-06-10")).toEqual(
-    { day: "2026-06-10", today: "2026-06-10", totals: zero, characters: [], repos: [], mvpCharacterId: null, streak: 0, prevDay: null, nextDay: null });
+    { day: "2026-06-10", today: "2026-06-10", characters: [],
+      totals: { ...zero, commits: 0, prsOpened: 0, prsMerged: 0, testRuns: 0, testFails: 0, input: 0, output: 0, cacheRead: 0, cacheWrite: 0, cacheWrite1h: 0, costMicros: 0 }, repos: [], mvpCharacterId: null, streak: 0, prevDay: null, nextDay: null });
   const at = new Date(2026, 5, 10, 12).getTime();
   store.persist([{ type: "credit", at, characterId: "c1", repoId: "r1", ...zero, commits: 0, prsOpened: 0, prsMerged: 0, testRuns: 0, testFails: 0, usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, cacheWrite1h: 0, costMicros: 0 }, tasks: 1, xp: 7 }]);
   const r = store.recap("2026-06-10", "2026-06-10");
   expect(r.totals).toMatchObject({ tasks: 1, xp: 7 });
   expect(r.characters).toMatchObject([{ characterId: "c1", name: "Ada", xp: 7 }]);
   expect(r.streak).toBe(1);
+  store.close();
+});
+
+test("session and character usage and a session's moments round-trip", () => {
+  const dir = mkdtempSync(join(tmpdir(), "aw-")); const path = join(dir, "w.db");
+  let store = openStore(path); const w = createWorld(store.load(), deps());
+  const usage = { input: 1_000, output: 200, cacheRead: 50_000, cacheWrite: 300, cacheWrite1h: 700 };
+  for (const e of [
+    ev("session_start", { at: 1000, tier: 3, model: "claude-opus-5-5" }), ev("prompt", { at: 2000, detail: { text: "go" } }),
+    ev("tool", { at: 3000, moment: "commit", detail: { tool: "Bash", toolKind: "shell" } }),
+    ev("usage", { at: 4000, usage, usageModel: "claude-opus-5-5" }),
+  ]) store.persist(w.apply(e));
+  const before = w.snapshot(0, false);
+  expect(before.sessions[0]!.usage).toMatchObject(usage);
+  expect(before.sessions[0]!.usage.costMicros).toBeGreaterThan(0);
+  expect(before.characters[0]!.usage).toEqual(before.sessions[0]!.usage);
+  expect(before.sessions[0]!.moments.commit).toEqual([3000]);
+  store.close();
+  store = openStore(path);
+  const init = store.load();
+  store.close();
+  expect(init.sessions[0]!.pendingUsage).toEqual(before.sessions[0]!.pendingUsage);
+  expect(createWorld(init, deps()).snapshot(0, false)).toEqual(before);
+});
+
+test("usage held while a session is Arriving survives a restart", () => {
+  const dir = mkdtempSync(join(tmpdir(), "aw-")); const path = join(dir, "w.db");
+  let store = openStore(path); const w = createWorld(store.load(), deps());
+  const usage = { input: 10, output: 20, cacheRead: 30, cacheWrite: 40, cacheWrite1h: 50 };
+  for (const e of [ev("session_start", { source: "x", tier: undefined }), ev("usage", { source: "x", usage, usageModel: "claude-opus-5-5" })]) store.persist(w.apply(e));
+  const held = w.snapshot(0, false).sessions[0]!;
+  expect(held.tierKnown).toBe(false);
+  expect(held.pendingUsage).toMatchObject(usage);
+  store.close();
+  store = openStore(path);
+  expect(store.load().sessions[0]!.pendingUsage).toEqual(held.pendingUsage);
+  store.close();
+});
+
+test("session_server rows round-trip and are deleted with the session", () => {
+  const dir = mkdtempSync(join(tmpdir(), "aw-")); const path = join(dir, "w.db");
+  let store = openStore(path); const w = createWorld(store.load(), deps());
+  store.persist([...w.apply(ev("session_start")), ...w.apply(ev("session_start", { sessionId: "s2" }))]);
+  expect(store.loadServerState()).toEqual(new Map());
+  store.saveCursor("t:s1", { offset: 10, ids: ["a"] });
+  store.saveCursor("t:s1", { offset: 20, ids: ["a", "b"] });
+  store.saveTerminal("t:s1", { tty: "ttys001" });
+  store.saveTerminal("t:s2", { tty: "ttys002" });
+  store.saveTerminal("t:s2", null);
+  store.close();
+  store = openStore(path);
+  expect(store.loadServerState()).toEqual(new Map<string, unknown>([
+    ["t:s1", { cursor: { offset: 20, ids: ["a", "b"] }, terminal: { tty: "ttys001" } }],
+    ["t:s2", { cursor: null, terminal: null }],
+  ]));
+  const w2 = createWorld(store.load(), deps());
+  store.persist(w2.apply(ev("session_end")));
+  expect([...store.loadServerState().keys()]).toEqual(["t:s2"]);
+  store.close();
+});
+
+test("a malformed stored cursor or terminal loads as null", () => {
+  const dir = mkdtempSync(join(tmpdir(), "aw-")); const path = join(dir, "w.db");
+  openStore(path).close();
+  const db = new DatabaseSync(path);
+  const put = db.prepare("INSERT INTO session_server (key, cursor, terminal) VALUES (?, ?, ?)");
+  put.run("a", "{not json", "{not json");
+  put.run("b", '{"offset":-1,"ids":[]}', null);
+  put.run("c", '{"offset":5,"ids":[1]}', null);
+  put.run("d", '{"offset":5}', null);
+  db.close();
+  const store = openStore(path);
+  expect([...store.loadServerState().values()]).toEqual(Array(4).fill({ cursor: null, terminal: null }));
+  store.close();
+});
+
+test("a version-4 database with data opens, loads with zero usage and recaps with zeros for the new numbers", () => {
+  const dir = mkdtempSync(join(tmpdir(), "aw-")); const path = join(dir, "w.db");
+  const db = new DatabaseSync(path);
+  for (const m of MIGRATIONS.slice(0, 4)) db.exec(m);
+  db.exec("PRAGMA user_version = 4");
+  db.exec(`INSERT INTO characters (id, name, tier, look, xp, created_at, last_active_at, retired, stats)
+    VALUES ('c1', 'Ada', 3, '{}', 10, 0, 0, 0, '{"tasks":1,"tools":2}')`);
+  db.exec(`INSERT INTO repos (id, path, name, created_at) VALUES ('r1', '/r', 'r', 0)`);
+  db.exec(`INSERT INTO sessions (key, source, session_id, character_id, temp_look, repo_id, state, state_since, model, tier, effort,
+    started_at, last_event_at, task, last_summary, attention, activity, extras) VALUES ('t:s1', 't', 's1', 'c1', NULL, 'r1', 'idle', 0, NULL, 3, NULL, 0, 0, NULL, NULL, 0, '[]',
+    '{"context":null,"sidekicks":[],"lastTool":null}')`);
+  db.exec(`INSERT INTO daily (day, character_id, repo_id, tasks, tools, xp) VALUES ('2026-06-10', 'c1', 'r1', 2, 5, 30)`);
+  db.close();
+  const store = openStore(path);
+  const zeroUsage = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, cacheWrite1h: 0, costMicros: 0 };
+  const init = store.load();
+  expect(init.characters[0]!.usage).toEqual(zeroUsage);
+  expect(init.sessions[0]).toMatchObject({ usage: zeroUsage, pendingUsage: zeroUsage, moments: {} });
+  const totals = { tasks: 2, tools: 5, failures: 0, xp: 30, levels: 0, compactions: 0, sidekicks: 0,
+    commits: 0, prsOpened: 0, prsMerged: 0, testRuns: 0, testFails: 0, ...zeroUsage };
+  const r = store.recap("2026-06-10", "2026-06-10");
+  expect(r.totals).toEqual(totals);
+  expect(r.characters).toEqual([{ characterId: "c1", name: "Ada", ...totals }]);
+  expect(r.repos).toEqual([{ repoId: "r1", name: "r", ...totals }]);
+  expect(store.loadServerState()).toEqual(new Map());
   store.close();
 });

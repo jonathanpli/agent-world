@@ -5,10 +5,12 @@ import { addDays, localDay } from "../../src/server/recap";
 import { openStore, type Store } from "../../src/server/store";
 import type { Character, Delta } from "../../src/shared/types";
 
-const zero = { tasks: 0, tools: 0, failures: 0, xp: 0, levels: 0, compactions: 0, sidekicks: 0 };
+const counts = { tasks: 0, tools: 0, failures: 0, xp: 0, levels: 0, compactions: 0, sidekicks: 0, commits: 0, prsOpened: 0, prsMerged: 0, testRuns: 0, testFails: 0 };
+const noUsage = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, cacheWrite1h: 0, costMicros: 0 };
+const zero = { ...counts, ...noUsage };
 const at = (day: string, h = 12) => new Date(`${day}T${String(h).padStart(2, "0")}:00:00-05:00`).getTime();
-const credit = (day: string, characterId: string | null, repoId: string, over: Partial<typeof zero> = {}): Delta =>
-  ({ type: "credit", at: at(day), characterId, repoId, ...zero, commits: 0, prsOpened: 0, prsMerged: 0, testRuns: 0, testFails: 0, usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, cacheWrite1h: 0, costMicros: 0 }, ...over });
+const credit = (day: string, characterId: string | null, repoId: string, over: Partial<typeof counts> = {}, usage: Partial<typeof noUsage> = {}): Delta =>
+  ({ type: "credit", at: at(day), characterId, repoId, ...counts, ...over, usage: { ...noUsage, ...usage } });
 const char = (id: string, name: string, retired = false): Delta => ({
   type: "character", character: { id, name, tier: 1, look: {}, xp: 0, createdAt: 0, lastActiveAt: 0, retired, repoXp: {}, achievements: {},
     stats: { tasks: 0, tools: 0, compactions: 0, sidekicks: 0 } } as unknown as Character });
@@ -36,7 +38,7 @@ test("credits aggregate per day and repo; temp counts in totals and repos only; 
     credit("2026-06-10", null, "r2", { tasks: 2, tools: 1, xp: 99, compactions: 1, sidekicks: 2 }),
     credit("2026-06-09", "a", "r1", { tasks: 4, xp: 40 }));
   const r = s.recap("2026-06-10", "2026-06-10");
-  expect(r.totals).toEqual({ tasks: 5, tools: 17, failures: 1, xp: 117, levels: 1, compactions: 1, sidekicks: 2 });
+  expect(r.totals).toEqual({ ...zero, tasks: 5, tools: 17, failures: 1, xp: 117, levels: 1, compactions: 1, sidekicks: 2 });
   expect(r.characters.map(c => [c.characterId, c.name, c.xp])).toEqual([["a", "Ada", 15], ["b", "Bo", 3]]);
   expect(r.repos.map(x => [x.repoId, x.name, x.tasks, x.tools])).toEqual([["r2", "beta", 3, 10], ["r1", "alpha", 2, 7]]);
   expect(r.mvpCharacterId).toBe("a");
@@ -74,4 +76,26 @@ test("prevDay and nextDay skip empty days", () => {
   const e = s.recap("2026-06-07", "2026-06-10");
   expect([e.prevDay, e.nextDay]).toEqual(["2026-06-05", "2026-06-09"]);
   expect(s.recap("2026-06-09", "2026-06-10").nextDay).toBeNull();
+});
+
+test("moment counters, tokens and cost aggregate per day, character and repo", () => {
+  const u = (n: number) => ({ input: n, output: 2 * n, cacheRead: 3 * n, cacheWrite: 4 * n, cacheWrite1h: 5 * n, costMicros: 6 * n });
+  const s = seeded(char("a", "Ada"), char("b", "Bo"), repo("r1", "alpha"), repo("r2", "beta"),
+    credit("2026-06-10", "a", "r1", { xp: 10, commits: 2, testRuns: 3, testFails: 1 }, u(1)),
+    credit("2026-06-10", "a", "r2", { xp: 1, prsOpened: 1 }, u(10)),
+    credit("2026-06-10", "b", "r1", { xp: 5, prsMerged: 1, commits: 1 }, u(100)),
+    credit("2026-06-10", null, "r1", { commits: 4 }, u(1000)),
+    credit("2026-06-09", "a", "r1", { commits: 50 }, u(9)));
+  const r = s.recap("2026-06-10", "2026-06-10");
+  expect(r.totals).toEqual({ ...zero, xp: 16, commits: 7, prsOpened: 1, prsMerged: 1, testRuns: 3, testFails: 1, ...u(1111) });
+  expect(r.characters).toEqual([
+    { characterId: "a", name: "Ada", ...zero, xp: 11, commits: 2, prsOpened: 1, testRuns: 3, testFails: 1, ...u(11) },
+    { characterId: "b", name: "Bo", ...zero, xp: 5, commits: 1, prsMerged: 1, ...u(100) },
+  ]);
+  expect(r.repos).toEqual([
+    { repoId: "r1", name: "alpha", ...zero, xp: 15, commits: 7, prsMerged: 1, testRuns: 3, testFails: 1, ...u(1101) },
+    { repoId: "r2", name: "beta", ...zero, xp: 1, prsOpened: 1, ...u(10) },
+  ]);
+  expect(r.mvpCharacterId).toBe("a");
+  expect(s.recap("2026-06-09", "2026-06-10").totals).toMatchObject({ commits: 50, ...u(9) });
 });

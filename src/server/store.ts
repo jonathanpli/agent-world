@@ -6,6 +6,7 @@ import type { AgentEvent, Character, Delta, Recap, Repo, Session, Settings, Usag
 import type { WorldInit } from "../core/world";
 import { MIGRATIONS } from "./migrations";
 import { buildRecap, localDay, TEMP_ID } from "./recap";
+import type { UsageCursor } from "./usageReader";
 
 export type Store = {
   load(): WorldInit;                    // settings default to CONFIG.defaultSettings when absent; learned limits to {}
@@ -14,6 +15,10 @@ export type Store = {
   pruneEvents(olderThan: number): void;
   eventCount(): number;
   recap(day: string, today: string): Recap;
+  /** Server-only session data by session key: the transcript usage cursor and terminal identifiers (null when absent or malformed). */
+  loadServerState(): Map<string, { cursor: UsageCursor | null; terminal: unknown | null }>;
+  saveCursor(key: string, cursor: UsageCursor): void;
+  saveTerminal(key: string, terminal: unknown | null): void;   // both rows go when the session is removed
   close(): void;
 };
 
@@ -22,11 +27,25 @@ type Row = Record<string, SQLInputValue>;
 /** Counters a row stored before they existed reads as 0. */
 const NO_STATS = { tasks: 0, tools: 0, compactions: 0, sidekicks: 0, commits: 0, prsOpened: 0, prsMerged: 0, testRuns: 0, testFails: 0 };
 const NO_PENDING = { ...NO_STATS, failures: 0 };
-/** Token totals are not stored yet (Task 3 adds them): every loaded row starts from zero. */
+/** Token totals a row stored before they existed read as 0. */
 const noUsage = (): UsageTotals => ({ input: 0, output: 0, cacheRead: 0, cacheWrite: 0, cacheWrite1h: 0, costMicros: 0 });
+const usageOf = (u: Partial<UsageTotals> | undefined): UsageTotals => ({ ...noUsage(), ...u });
 /** The settings-table key that holds the learned context limits; not a setting, so never part of `Settings`. */
 const LEARNED_LIMITS_KEY = "learnedLimits";
-type Extras = Pick<Session, "context" | "sidekicks" | "lastTool">;
+type Extras = Pick<Session, "context" | "sidekicks" | "lastTool" | "usage" | "pendingUsage" | "moments">;
+type CharacterExtras = Pick<Character, "usage">;
+
+const parseJson = (text: unknown): unknown => {
+  if (typeof text !== "string") return null;
+  try { return JSON.parse(text); } catch { return null; }
+};
+const isCount = (n: unknown): n is number => typeof n === "number" && Number.isSafeInteger(n) && n >= 0;
+/** A stored cursor, or null when it is missing or not one. */
+function asCursor(v: unknown): UsageCursor | null {
+  if (typeof v !== "object" || v === null) return null;
+  const { offset, ids } = v as Record<string, unknown>;
+  return isCount(offset) && Array.isArray(ids) && ids.every(i => typeof i === "string") ? { offset, ids } : null;
+}
 
 function migrate(db: DatabaseSync): void {
   const row = db.prepare("PRAGMA user_version").get() as { user_version: number };
@@ -55,10 +74,11 @@ export function openStore(path: string): Store {
 
   // Upserts (not INSERT OR REPLACE) keep a row's rowid, so load order stays the order rows were first created.
   const upsertCharacter = db.prepare(`
-    INSERT INTO characters (id, name, tier, look, xp, created_at, last_active_at, retired, stats)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+    INSERT INTO characters (id, name, tier, look, xp, created_at, last_active_at, retired, stats, extras)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     ON CONFLICT(id) DO UPDATE SET name = excluded.name, tier = excluded.tier, look = excluded.look, xp = excluded.xp,
-      created_at = excluded.created_at, last_active_at = excluded.last_active_at, retired = excluded.retired, stats = excluded.stats`);
+      created_at = excluded.created_at, last_active_at = excluded.last_active_at, retired = excluded.retired, stats = excluded.stats,
+      extras = excluded.extras`);
   const clearCharacterRepo = db.prepare("DELETE FROM character_repo WHERE character_id = ?");
   const insertCharacterRepo = db.prepare("INSERT INTO character_repo (character_id, repo_id, xp) VALUES (?, ?, ?)");
   const clearAchievements = db.prepare("DELETE FROM achievements WHERE character_id = ?");
@@ -78,12 +98,23 @@ export function openStore(path: string): Store {
       pending_xp = excluded.pending_xp, pending_stats = excluded.pending_stats, grace_since = excluded.grace_since,
       extras = excluded.extras`);
   const upsertDaily = db.prepare(`
-    INSERT INTO daily (day, character_id, repo_id, tasks, tools, failures, xp, levels, compactions, sidekicks)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    INSERT INTO daily (day, character_id, repo_id, tasks, tools, failures, xp, levels, compactions, sidekicks,
+      commits, prs_opened, prs_merged, test_runs, test_fails, input, output, cache_read, cache_write, cache_write_1h, cost_micros)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     ON CONFLICT(day, character_id, repo_id) DO UPDATE SET tasks = tasks + excluded.tasks, tools = tools + excluded.tools,
       failures = failures + excluded.failures, xp = xp + excluded.xp, levels = levels + excluded.levels,
-      compactions = compactions + excluded.compactions, sidekicks = sidekicks + excluded.sidekicks`);
+      compactions = compactions + excluded.compactions, sidekicks = sidekicks + excluded.sidekicks,
+      commits = commits + excluded.commits, prs_opened = prs_opened + excluded.prs_opened, prs_merged = prs_merged + excluded.prs_merged,
+      test_runs = test_runs + excluded.test_runs, test_fails = test_fails + excluded.test_fails,
+      input = input + excluded.input, output = output + excluded.output, cache_read = cache_read + excluded.cache_read,
+      cache_write = cache_write + excluded.cache_write, cache_write_1h = cache_write_1h + excluded.cache_write_1h,
+      cost_micros = cost_micros + excluded.cost_micros`);
   const deleteSession = db.prepare("DELETE FROM sessions WHERE key = ?");
+  const deleteServerState = db.prepare("DELETE FROM session_server WHERE key = ?");
+  const upsertCursor = db.prepare(`
+    INSERT INTO session_server (key, cursor) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET cursor = excluded.cursor`);
+  const upsertTerminal = db.prepare(`
+    INSERT INTO session_server (key, terminal) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET terminal = excluded.terminal`);
   const upsertSetting = db.prepare(`
     INSERT INTO settings (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value`);
   const getSetting = db.prepare("SELECT value FROM settings WHERE key = ?");
@@ -92,7 +123,8 @@ export function openStore(path: string): Store {
   const countEvents = db.prepare("SELECT COUNT(*) AS n FROM events");
 
   function saveCharacter(c: Character): void {
-    upsertCharacter.run(c.id, c.name, c.tier, JSON.stringify(c.look), c.xp, c.createdAt, c.lastActiveAt, c.retired ? 1 : 0, JSON.stringify(c.stats));
+    upsertCharacter.run(c.id, c.name, c.tier, JSON.stringify(c.look), c.xp, c.createdAt, c.lastActiveAt, c.retired ? 1 : 0, JSON.stringify(c.stats),
+      JSON.stringify({ usage: c.usage } satisfies CharacterExtras));
     clearCharacterRepo.run(c.id);
     for (const [repoId, xp] of Object.entries(c.repoXp)) insertCharacterRepo.run(c.id, repoId, xp);
     clearAchievements.run(c.id);
@@ -104,7 +136,9 @@ export function openStore(path: string): Store {
       s.key, s.source, s.sessionId, s.characterId, s.tempLook === null ? null : JSON.stringify(s.tempLook), s.repoId, s.state, s.stateSince,
       s.model, s.tier, s.effort, s.startedAt, s.lastEventAt, s.task, s.lastSummary, s.attention ? 1 : 0, JSON.stringify(s.activity),
       s.tierKnown ? 1 : 0, s.pendingXp, JSON.stringify(s.pendingStats), s.graceSince,
-      JSON.stringify({ context: s.context, sidekicks: s.sidekicks, lastTool: s.lastTool } satisfies Extras),
+      JSON.stringify({
+        context: s.context, sidekicks: s.sidekicks, lastTool: s.lastTool, usage: s.usage, pendingUsage: s.pendingUsage, moments: s.moments,
+      } satisfies Extras),
     );
   }
 
@@ -145,12 +179,15 @@ export function openStore(path: string): Store {
       m[r.achievement_id as string] = r.earned_at as number;
       achievements.set(id, m);
     }
-    const characters = (db.prepare("SELECT * FROM characters ORDER BY rowid").all() as Row[]).map((r): Character => ({
-      id: r.id as string, name: r.name as string, tier: r.tier as Character["tier"], look: JSON.parse(r.look as string),
-      xp: r.xp as number, createdAt: r.created_at as number, lastActiveAt: r.last_active_at as number, retired: r.retired === 1,
-      repoXp: repoXp.get(r.id as string) ?? {}, stats: { ...NO_STATS, ...JSON.parse(r.stats as string) }, achievements: achievements.get(r.id as string) ?? {},
-      usage: noUsage(),
-    }));
+    const characters = (db.prepare("SELECT * FROM characters ORDER BY rowid").all() as Row[]).map((r): Character => {
+      const extras: Partial<CharacterExtras> = JSON.parse(r.extras as string);
+      return {
+        id: r.id as string, name: r.name as string, tier: r.tier as Character["tier"], look: JSON.parse(r.look as string),
+        xp: r.xp as number, createdAt: r.created_at as number, lastActiveAt: r.last_active_at as number, retired: r.retired === 1,
+        repoXp: repoXp.get(r.id as string) ?? {}, stats: { ...NO_STATS, ...JSON.parse(r.stats as string) }, achievements: achievements.get(r.id as string) ?? {},
+        usage: usageOf(extras.usage),
+      };
+    });
     const repos = (db.prepare("SELECT * FROM repos ORDER BY rowid").all() as Row[]).map((r): Repo => ({
       id: r.id as string, path: r.path as string, name: r.name as string, createdAt: r.created_at as number,
     }));
@@ -166,7 +203,7 @@ export function openStore(path: string): Store {
         startedAt: r.started_at as number, lastEventAt: r.last_event_at as number, task: r.task as string | null,
         lastSummary: r.last_summary as string | null, attention: r.attention === 1, activity: JSON.parse(r.activity as string),
         context: extras.context ?? null, sidekicks: extras.sidekicks ?? [], lastTool: extras.lastTool ?? null,
-        usage: noUsage(), pendingUsage: noUsage(), moments: {},
+        usage: usageOf(extras.usage), pendingUsage: usageOf(extras.pendingUsage), moments: extras.moments ?? {},
       };
     });
     const settings: Record<string, unknown> = { ...CONFIG.defaultSettings };
@@ -184,12 +221,15 @@ export function openStore(path: string): Store {
           case "character": saveCharacter(d.character); break;
           case "repo": upsertRepo.run(d.repo.id, d.repo.path, d.repo.name, d.repo.createdAt); break;
           case "session": saveSession(d.session); break;
-          case "session_removed": deleteSession.run(d.key); break;
+          case "session_removed": deleteSession.run(d.key); deleteServerState.run(d.key); break;
           case "settings": saveSettings(d.settings); break;
           case "notice": break;
-          case "credit":
-            upsertDaily.run(localDay(d.at), d.characterId ?? TEMP_ID, d.repoId, d.tasks, d.tools, d.failures, d.xp, d.levels, d.compactions, d.sidekicks);
+          case "credit": {
+            const u = d.usage;
+            upsertDaily.run(localDay(d.at), d.characterId ?? TEMP_ID, d.repoId, d.tasks, d.tools, d.failures, d.xp, d.levels, d.compactions, d.sidekicks,
+              d.commits, d.prsOpened, d.prsMerged, d.testRuns, d.testFails, u.input, u.output, u.cacheRead, u.cacheWrite, u.cacheWrite1h, u.costMicros);
             break;
+          }
           case "learned_limit": saveLearnedLimit(d.model, d.limit); break;
         }
       }
@@ -200,9 +240,20 @@ export function openStore(path: string): Store {
     }
   }
 
+  function loadServerState(): Map<string, { cursor: UsageCursor | null; terminal: unknown | null }> {
+    const out = new Map<string, { cursor: UsageCursor | null; terminal: unknown | null }>();
+    for (const r of db.prepare("SELECT key, cursor, terminal FROM session_server ORDER BY rowid").all() as Row[]) {
+      out.set(r.key as string, { cursor: asCursor(parseJson(r.cursor)), terminal: parseJson(r.terminal) });
+    }
+    return out;
+  }
+
   return {
     load,
     persist,
+    loadServerState,
+    saveCursor: (key, cursor) => { upsertCursor.run(key, JSON.stringify(cursor)); },
+    saveTerminal: (key, terminal) => { upsertTerminal.run(key, terminal === null ? null : JSON.stringify(terminal)); },
     logEvent: ev => { insertEvent.run(ev.at, ev.source, ev.sessionId, ev.repoPath, ev.kind, JSON.stringify(ev)); },
     pruneEvents: olderThan => { deleteEventsBefore.run(olderThan); },
     recap: (day, today) => buildRecap(db, day, today),

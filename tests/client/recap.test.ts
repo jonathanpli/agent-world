@@ -5,7 +5,8 @@ import { tickerItems } from "../../src/client/ui/ticker";
 import type { Recap, RecapTotals } from "../../src/shared/types";
 import { char, repo, session, snap } from "../helpers/clientFixtures";
 
-const totals = (over: Partial<RecapTotals> = {}): RecapTotals => ({ tasks: 0, tools: 0, failures: 0, xp: 0, levels: 0, compactions: 0, sidekicks: 0, ...over });
+const totals = (over: Partial<RecapTotals> = {}): RecapTotals => ({ tasks: 0, tools: 0, failures: 0, xp: 0, levels: 0, compactions: 0, sidekicks: 0,
+  commits: 0, prsOpened: 0, prsMerged: 0, testRuns: 0, testFails: 0, input: 0, output: 0, cacheRead: 0, cacheWrite: 0, cacheWrite1h: 0, costMicros: 0, ...over });
 const recap = (t: Partial<RecapTotals> = {}): Recap => ({
   day: "2026-11-20", today: "2026-11-21", totals: totals(t), characters: [], repos: [], mvpCharacterId: null, streak: 0, prevDay: null, nextDay: null,
 });
